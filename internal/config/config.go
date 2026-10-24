@@ -1,0 +1,284 @@
+// Package config carga toda la configuración desde variables de entorno, con los
+// mismos nombres y valores por defecto que la API en Java (application.yml). En
+// local, lee opcionalmente un archivo .env de la carpeta del proyecto.
+package config
+
+import (
+	"encoding/base64"
+	"fmt"
+	"os"
+	"strconv"
+	"strings"
+	"time"
+
+	"github.com/joho/godotenv"
+)
+
+// Config agrupa la configuración de todos los componentes.
+type Config struct {
+	Server    Server
+	Security  Security
+	Readings  Readings
+	Mongo     Mongo
+	Redis     Redis
+	Mail      Mail
+	MQTT      MQTT
+	AI        AI
+	Telegram  Telegram
+	Simulator Simulator
+	Channels  Channels
+}
+
+type Server struct {
+	Port         int
+	LogLevel     string
+	WebBaseURL   string
+	PublicAPIURL string
+	DocsEnabled  bool
+}
+
+type Security struct {
+	JWTSecret               string
+	JWTExpiration           time.Duration
+	AESKey                  string
+	CORSAllowedOrigins      []string
+	RateLimitPerMinute      int
+	AuthRateLimitPerMinute  int
+	PasswordResetExpiration time.Duration
+}
+
+type Readings struct {
+	MinInterval time.Duration
+	MaxPageSize int
+}
+
+type Mongo struct {
+	URI string
+}
+
+type Redis struct {
+	Host     string
+	Port     int
+	Username string
+	Password string
+	Database int
+	Timeout  time.Duration
+}
+
+type Mail struct {
+	Enabled  bool
+	Host     string
+	Port     int
+	Username string
+	Password string
+	SMTPAuth bool
+	STARTTLS bool
+	From     string
+}
+
+type MQTT struct {
+	Enabled        bool
+	BrokerURI      string
+	ClientID       string
+	Username       string
+	Password       string
+	TopicPrefix    string
+	PublicHost     string
+	PublicPort     int
+	PublicTLS      bool
+	WebSocketURL   string
+	CommandTimeout time.Duration
+}
+
+type AI struct {
+	Enabled            bool
+	BaseURL            string
+	Token              string
+	Timeout            time.Duration
+	EvaluationInterval time.Duration
+	AutomationCooldown time.Duration
+	HistorySize        int
+	Timezone           string
+	LearningEnabled    bool
+	LearningFlush      time.Duration
+}
+
+type Telegram struct {
+	BotToken      string
+	BotUsername   string
+	Mode          string
+	WebhookURL    string
+	WebhookSecret string
+	APIBaseURL    string
+}
+
+type Simulator struct {
+	Enabled           bool
+	BaseURL           string
+	Token             string
+	Timeout           time.Duration
+	ReconcileInterval time.Duration
+}
+
+type Channels struct {
+	DigestInterval time.Duration
+}
+
+// Load lee el .env opcional y arma la configuración. Falla si faltan los
+// secretos obligatorios o tienen un formato inválido.
+func Load() (Config, error) {
+	// El .env es opcional: en producción la configuración viene del entorno.
+	_ = godotenv.Load()
+
+	var errs []string
+	fail := func(format string, args ...any) {
+		errs = append(errs, fmt.Sprintf(format, args...))
+	}
+
+	dur := func(key, def string) time.Duration {
+		d, err := ParseDuration(env(key, def))
+		if err != nil {
+			fail("%s: %v", key, err)
+		}
+		return d
+	}
+
+	publicAPIURL := env("PUBLIC_API_URL", "http://localhost:8091")
+
+	cfg := Config{
+		Server: Server{
+			Port:         envInt("PORT", 8091),
+			LogLevel:     env("LOG_LEVEL", "INFO"),
+			WebBaseURL:   env("WEB_BASE_URL", "http://localhost:5173"),
+			PublicAPIURL: publicAPIURL,
+			DocsEnabled:  envBool("API_DOCS_ENABLED", true),
+		},
+		Security: Security{
+			JWTSecret:               os.Getenv("SMARTPOT_JWT_SECRET"),
+			JWTExpiration:           dur("JWT_EXPIRATION", "P7D"),
+			AESKey:                  os.Getenv("SMARTPOT_AES_KEY"),
+			CORSAllowedOrigins:      envList("CORS_ALLOWED_ORIGINS", "http://localhost:5173"),
+			RateLimitPerMinute:      envInt("RATE_LIMIT_PER_MINUTE", 300),
+			AuthRateLimitPerMinute:  envInt("AUTH_RATE_LIMIT_PER_MINUTE", 10),
+			PasswordResetExpiration: dur("PASSWORD_RESET_EXPIRATION", "PT30M"),
+		},
+		Readings: Readings{
+			MinInterval: dur("READINGS_MIN_INTERVAL", "PT5S"),
+			MaxPageSize: envInt("READINGS_MAX_PAGE_SIZE", 2000),
+		},
+		Mongo: Mongo{
+			URI: env("MONGODB_URI", "mongodb://localhost:27017/smartpot"),
+		},
+		Redis: Redis{
+			Host:     env("REDIS_HOST", "localhost"),
+			Port:     envInt("REDIS_PORT", 6379),
+			Username: env("REDIS_USERNAME", ""),
+			Password: env("REDIS_PASSWORD", ""),
+			Database: envInt("REDIS_DATABASE", 0),
+			Timeout:  2 * time.Second,
+		},
+		Mail: Mail{
+			Enabled:  envBool("MAIL_ENABLED", true),
+			Host:     env("MAIL_HOST", "localhost"),
+			Port:     envInt("MAIL_PORT", 1025),
+			Username: env("MAIL_USERNAME", ""),
+			Password: env("MAIL_PASSWORD", ""),
+			SMTPAuth: envBool("MAIL_SMTP_AUTH", false),
+			STARTTLS: envBool("MAIL_SMTP_STARTTLS", false),
+			From:     env("MAIL_FROM", "SmartPot <no-reply@smartpot.app>"),
+		},
+		MQTT: MQTT{
+			Enabled:        envBool("MQTT_ENABLED", true),
+			BrokerURI:      env("MQTT_BROKER_URI", "tcp://localhost:1883"),
+			ClientID:       env("MQTT_CLIENT_ID", "smartpot-api"),
+			Username:       env("MQTT_ADMIN_USERNAME", "smartpot-api"),
+			Password:       env("MQTT_ADMIN_PASSWORD", ""),
+			TopicPrefix:    env("MQTT_TOPIC_PREFIX", "smartpot/v1"),
+			PublicHost:     env("MQTT_PUBLIC_HOST", "localhost"),
+			PublicPort:     envInt("MQTT_PUBLIC_PORT", 1883),
+			PublicTLS:      envBool("MQTT_PUBLIC_TLS", false),
+			WebSocketURL:   env("MQTT_WEBSOCKET_URL", "ws://localhost:9001"),
+			CommandTimeout: dur("MQTT_COMMAND_TIMEOUT", "PT2M"),
+		},
+		AI: AI{
+			Enabled:            envBool("AI_ENABLED", true),
+			BaseURL:            env("AI_BASE_URL", "http://localhost:8000"),
+			Token:              os.Getenv("SMARTPOT_AI_TOKEN"),
+			Timeout:            dur("AI_TIMEOUT", "PT5S"),
+			EvaluationInterval: dur("AI_EVALUATION_INTERVAL", "PT5M"),
+			AutomationCooldown: dur("AI_AUTOMATION_COOLDOWN", "PT10M"),
+			HistorySize:        envInt("AI_HISTORY_SIZE", 48),
+			Timezone:           env("AI_TIMEZONE", "America/Bogota"),
+			LearningEnabled:    envBool("AI_LEARNING_ENABLED", true),
+			LearningFlush:      dur("AI_LEARNING_FLUSH_INTERVAL", "PT1M"),
+		},
+		Telegram: Telegram{
+			BotToken:      os.Getenv("TELEGRAM_BOT_TOKEN"),
+			BotUsername:   os.Getenv("TELEGRAM_BOT_USERNAME"),
+			Mode:          env("TELEGRAM_MODE", "polling"),
+			WebhookURL:    env("TELEGRAM_WEBHOOK_URL", publicAPIURL+"/api/v1/channels/telegram/webhook"),
+			WebhookSecret: os.Getenv("TELEGRAM_WEBHOOK_SECRET"),
+			APIBaseURL:    env("TELEGRAM_API_BASE_URL", "https://api.telegram.org"),
+		},
+		Simulator: Simulator{
+			Enabled:           envBool("SIMULATOR_ENABLED", true),
+			BaseURL:           env("SIMULATOR_BASE_URL", "http://localhost:8081"),
+			Token:             os.Getenv("SIMULATOR_TOKEN"),
+			Timeout:           dur("SIMULATOR_TIMEOUT", "PT10S"),
+			ReconcileInterval: dur("SIMULATOR_RECONCILE_INTERVAL", "PT1M"),
+		},
+		Channels: Channels{
+			DigestInterval: dur("CHANNELS_DIGEST_INTERVAL", "PT1M"),
+		},
+	}
+
+	// Secretos obligatorios, igual que en Java: sin ellos la API no arranca.
+	if len(cfg.Security.JWTSecret) < 32 {
+		fail("SMARTPOT_JWT_SECRET debe tener al menos 32 caracteres")
+	}
+	if key, err := base64.StdEncoding.DecodeString(cfg.Security.AESKey); err != nil || len(key) != 32 {
+		fail("SMARTPOT_AES_KEY debe ser Base64 de 32 bytes (AES-256)")
+	}
+
+	if len(errs) > 0 {
+		return Config{}, fmt.Errorf("configuración inválida:\n  - %s", strings.Join(errs, "\n  - "))
+	}
+	return cfg, nil
+}
+
+func env(key, def string) string {
+	if v, ok := os.LookupEnv(key); ok && v != "" {
+		return v
+	}
+	return def
+}
+
+func envInt(key string, def int) int {
+	if v, ok := os.LookupEnv(key); ok && v != "" {
+		if n, err := strconv.Atoi(strings.TrimSpace(v)); err == nil {
+			return n
+		}
+	}
+	return def
+}
+
+func envBool(key string, def bool) bool {
+	if v, ok := os.LookupEnv(key); ok && v != "" {
+		if b, err := strconv.ParseBool(strings.TrimSpace(v)); err == nil {
+			return b
+		}
+	}
+	return def
+}
+
+func envList(key, def string) []string {
+	raw := env(key, def)
+	parts := strings.Split(raw, ",")
+	out := make([]string, 0, len(parts))
+	for _, p := range parts {
+		if t := strings.TrimSpace(p); t != "" {
+			out = append(out, t)
+		}
+	}
+	return out
+}
