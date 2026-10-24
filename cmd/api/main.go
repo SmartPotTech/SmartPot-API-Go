@@ -12,11 +12,13 @@ import (
 	"syscall"
 	"time"
 
+	"github.com/SmartPotTech/SmartPot-API-Go/internal/cache"
 	"github.com/SmartPotTech/SmartPot-API-Go/internal/config"
 	"github.com/SmartPotTech/SmartPot-API-Go/internal/health"
 	"github.com/SmartPotTech/SmartPot-API-Go/internal/httpserver"
 	"github.com/SmartPotTech/SmartPot-API-Go/internal/mongodb"
 	"github.com/SmartPotTech/SmartPot-API-Go/internal/platform/logging"
+	"github.com/SmartPotTech/SmartPot-API-Go/internal/security"
 )
 
 func main() {
@@ -42,7 +44,15 @@ func run() error {
 		return err
 	}
 
+	redisClient := cache.NewRedisClient(
+		fmt.Sprintf("%s:%d", cfg.Redis.Host, cfg.Redis.Port),
+		cfg.Redis.Username, cfg.Redis.Password, cfg.Redis.Database, cfg.Redis.Timeout)
+	cacheStore := cache.NewStore(redisClient)
+
+	rateLimiter := security.NewRateLimiter(cacheStore, cfg.Security.RateLimitPerMinute, cfg.Security.AuthRateLimitPerMinute)
+
 	engine := httpserver.New(logger)
+	engine.Use(security.CORS(cfg.Security.CORSAllowedOrigins), rateLimiter.Middleware())
 
 	checker := health.Checker{
 		Database: func() bool {
@@ -50,9 +60,26 @@ func run() error {
 			defer cancel()
 			return mongoClient.Ping(ctx) == nil
 		},
-		// Broker, caché, IA y simulador se cablean en sus fases.
+		Cache: cacheStore.RedisAvailable,
+		// Broker, IA y simulador se cablean en sus fases.
 	}
 	engine.GET("/health", checker.Handler())
+
+	// Purga de la caché local, sin cron en el servidor.
+	purgeCtx, stopPurge := context.WithCancel(context.Background())
+	defer stopPurge()
+	go func() {
+		ticker := time.NewTicker(time.Minute)
+		defer ticker.Stop()
+		for {
+			select {
+			case <-purgeCtx.Done():
+				return
+			case <-ticker.C:
+				cacheStore.PurgeExpired()
+			}
+		}
+	}()
 
 	srv := &http.Server{
 		Addr:              fmt.Sprintf(":%d", cfg.Server.Port),
@@ -82,6 +109,10 @@ func run() error {
 	defer cancel()
 	if err := srv.Shutdown(shutdownCtx); err != nil {
 		logger.Error("apagado del servidor con error", "err", err)
+	}
+	stopPurge()
+	if err := cacheStore.Close(); err != nil {
+		logger.Error("cierre de Redis con error", "err", err)
 	}
 	if err := mongoClient.Disconnect(shutdownCtx); err != nil {
 		logger.Error("desconexión de Mongo con error", "err", err)
