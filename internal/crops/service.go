@@ -76,6 +76,16 @@ func NewService(repo *Repository, encryptor *security.Encryptor, topics *mqtt.To
 	}
 }
 
+// SetProvisioner fija el aprovisionador real del broker (gateway MQTT).
+func (s *Service) SetProvisioner(p DeviceProvisioner) {
+	s.provisioner = p
+}
+
+// SetActuatorSeeder fija el sembrador de actuadores real.
+func (s *Service) SetActuatorSeeder(a ActuatorSeeder) {
+	s.actuators = a
+}
+
 // Create crea un cultivo real o virtual con sus actuadores y cuenta en el broker.
 func (s *Service) Create(ctx context.Context, ownerID string, req CropRequest) (CreatedCrop, error) {
 	ownerOID, ok := objectid.Parse(ownerID)
