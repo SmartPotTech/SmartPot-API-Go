@@ -1,0 +1,442 @@
+package crops
+
+import (
+	"context"
+	"crypto/rand"
+	"encoding/base64"
+	"fmt"
+	"log/slog"
+	"strings"
+	"time"
+
+	"github.com/SmartPotTech/SmartPot-API-Go/internal/mqtt"
+	"github.com/SmartPotTech/SmartPot-API-Go/internal/notifications"
+	"github.com/SmartPotTech/SmartPot-API-Go/internal/platform/apperr"
+	"github.com/SmartPotTech/SmartPot-API-Go/internal/platform/events"
+	"github.com/SmartPotTech/SmartPot-API-Go/internal/platform/geo"
+	"github.com/SmartPotTech/SmartPot-API-Go/internal/platform/objectid"
+	"github.com/SmartPotTech/SmartPot-API-Go/internal/security"
+)
+
+// MaxCropsPerUser es el máximo de cultivos por cuenta.
+const MaxCropsPerUser = 20
+
+const (
+	notFound           = "El cultivo no existe"
+	virtualHasNoDevice = "Un cultivo virtual no usa credenciales: SmartPot lo simula por ti"
+)
+
+// DeviceProvisioner aprovisiona la cuenta del dispositivo en el broker (lo
+// implementa el paquete mqtt).
+type DeviceProvisioner interface {
+	Provision(ctx context.Context, cropID, key string, rotate bool) error
+	Deprovision(ctx context.Context, cropID string) error
+}
+
+// ActuatorSeeder crea los actuadores por defecto de un cultivo (lo implementa el
+// paquete actuators).
+type ActuatorSeeder interface {
+	SeedDefaults(ctx context.Context, cropID string, virtual bool) error
+}
+
+// MQTTPublic son los datos públicos del broker que se entregan al dispositivo.
+type MQTTPublic struct {
+	Host         string
+	Port         int
+	TLS          bool
+	WebSocketURL string
+}
+
+// CreatedCrop es el resultado de crear un cultivo.
+type CreatedCrop struct {
+	Crop        *Crop
+	Credentials *DeviceCredentialsResponse
+}
+
+// Service implementa la lógica de los cultivos.
+type Service struct {
+	repo        *Repository
+	encryptor   *security.Encryptor
+	topics      *mqtt.TopicResolver
+	mqttPublic  MQTTPublic
+	provisioner DeviceProvisioner
+	actuators   ActuatorSeeder
+	notifier    *notifications.Service
+	bus         *events.Bus
+	clock       func() time.Time
+}
+
+// NewService crea el servicio de cultivos.
+func NewService(repo *Repository, encryptor *security.Encryptor, topics *mqtt.TopicResolver, mqttPublic MQTTPublic,
+	provisioner DeviceProvisioner, actuators ActuatorSeeder, notifier *notifications.Service, bus *events.Bus,
+	clock func() time.Time) *Service {
+	return &Service{
+		repo: repo, encryptor: encryptor, topics: topics, mqttPublic: mqttPublic,
+		provisioner: provisioner, actuators: actuators, notifier: notifier, bus: bus, clock: clock,
+	}
+}
+
+// Create crea un cultivo real o virtual con sus actuadores y cuenta en el broker.
+func (s *Service) Create(ctx context.Context, ownerID string, req CropRequest) (CreatedCrop, error) {
+	ownerOID, ok := objectid.Parse(ownerID)
+	if !ok {
+		return CreatedCrop{}, apperr.Unauthorized("Tu sesión no es válida o expiró. Inicia sesión de nuevo")
+	}
+	count, err := s.repo.CountByOwner(ctx, ownerOID)
+	if err != nil {
+		return CreatedCrop{}, err
+	}
+	if count >= MaxCropsPerUser {
+		return CreatedCrop{}, apperr.BadRequest(fmt.Sprintf("Alcanzaste el máximo de %d cultivos por cuenta", MaxCropsPerUser))
+	}
+	now := s.clock()
+	key := newDeviceKey()
+	cipher, err := s.encryptor.Encrypt(key)
+	if err != nil {
+		return CreatedCrop{}, err
+	}
+	kind := KindReal
+	if req.Kind != nil {
+		kind = *req.Kind
+	}
+	form := FormPot
+	if req.Form != nil {
+		form = *req.Form
+	}
+	rotatedAt := now
+	crop := &Crop{
+		OwnerID:   ownerOID,
+		Name:      strings.TrimSpace(req.Name),
+		Type:      *req.Type,
+		Kind:      kind,
+		Form:      form,
+		Placement: req.Placement.ToPlacement(),
+		Device:    &Device{KeyCiphertext: cipher, KeyRotatedAt: &rotatedAt},
+		CreatedAt: now,
+		UpdatedAt: now,
+	}
+	if err := s.repo.Insert(ctx, crop); err != nil {
+		return CreatedCrop{}, err
+	}
+	if err := s.actuators.SeedDefaults(ctx, crop.HexID(), crop.IsVirtual()); err != nil {
+		return CreatedCrop{}, err
+	}
+	// La cuenta en el broker (incluso la de un virtual) es best-effort: Paho reintenta.
+	if err := s.provisioner.Provision(ctx, crop.HexID(), key, false); err != nil {
+		slog.Warn("no se pudo aprovisionar el dispositivo en el broker", "cropId", crop.HexID(), "err", err)
+	}
+	slog.Info("cultivo creado", "kind", kind, "cropId", crop.HexID())
+
+	var creds *DeviceCredentialsResponse
+	if !crop.IsVirtual() {
+		c := s.credentials(crop, key)
+		creds = &c
+	}
+	return CreatedCrop{Crop: crop, Credentials: creds}, nil
+}
+
+// List devuelve los cultivos del dueño.
+func (s *Service) List(ctx context.Context, ownerID string) ([]Crop, error) {
+	ownerOID, ok := objectid.Parse(ownerID)
+	if !ok {
+		return []Crop{}, nil
+	}
+	return s.repo.ListByOwner(ctx, ownerOID)
+}
+
+// GetOwned devuelve un cultivo comprobando el dueño (404 si no existe o es de otro).
+func (s *Service) GetOwned(ctx context.Context, ownerID, cropID string) (*Crop, error) {
+	if err := objectid.Require(cropID, notFound); err != nil {
+		return nil, err
+	}
+	ownerOID, _ := objectid.Parse(ownerID)
+	idOID, _ := objectid.Parse(cropID)
+	crop, err := s.repo.FindByIDAndOwner(ctx, idOID, ownerOID)
+	if err != nil {
+		return nil, err
+	}
+	if crop == nil {
+		return nil, apperr.NotFound(notFound)
+	}
+	return crop, nil
+}
+
+// Find busca un cultivo por id, sin comprobar dueño (nil si no existe).
+func (s *Service) Find(ctx context.Context, cropID string) (*Crop, error) {
+	oid, ok := objectid.Parse(cropID)
+	if !ok {
+		return nil, nil
+	}
+	return s.repo.FindByID(ctx, oid)
+}
+
+// Update cambia nombre, especie, forma y lugar. El tipo (real/virtual) no cambia.
+func (s *Service) Update(ctx context.Context, ownerID, cropID string, req CropRequest) (*Crop, error) {
+	crop, err := s.GetOwned(ctx, ownerID, cropID)
+	if err != nil {
+		return nil, err
+	}
+	if req.Kind != nil && *req.Kind != crop.KindOrDefault() {
+		return nil, apperr.BadRequest("Un cultivo no puede pasar de real a virtual ni al revés: crea uno nuevo")
+	}
+	crop.Name = strings.TrimSpace(req.Name)
+	crop.Type = *req.Type
+	if req.Form != nil {
+		crop.Form = *req.Form
+	}
+	placement := crop.Placement
+	if req.Placement != nil {
+		placement = req.Placement.ToPlacement()
+	}
+	moved := !geo.Equal(placement, crop.Placement)
+	crop.Placement = placement
+	crop.Health = nil
+	crop.UpdatedAt = s.clock()
+	if err := s.repo.Save(ctx, crop); err != nil {
+		return nil, err
+	}
+	if moved {
+		s.bus.Publish(PlacementChangedEvent{CropID: crop.HexID()})
+	}
+	return crop, nil
+}
+
+// SetLocation cambia solo la ubicación del cultivo (la simulación la comparte).
+func (s *Service) SetLocation(ctx context.Context, crop *Crop, location geo.Location) (*Crop, error) {
+	var placement geo.Placement
+	if crop.Placement == nil {
+		setting := geo.Outdoor
+		exposure := geo.FullSun
+		placement = geo.Placement{Setting: &setting, Exposure: &exposure, Location: &location}
+	} else {
+		placement = crop.Placement.WithLocation(&location)
+	}
+	if geo.Equal(&placement, crop.Placement) {
+		return crop, nil
+	}
+	crop.Placement = &placement
+	if err := s.repo.UpdatePlacement(ctx, crop.ID, &placement, s.clock()); err != nil {
+		return nil, err
+	}
+	return crop, nil
+}
+
+// SetAutomation activa o desactiva el modo automático de un cultivo.
+func (s *Service) SetAutomation(ctx context.Context, ownerID, cropID string, enabled bool) (*Crop, error) {
+	crop, err := s.GetOwned(ctx, ownerID, cropID)
+	if err != nil {
+		return nil, err
+	}
+	crop.AutomationEnabled = enabled
+	crop.UpdatedAt = s.clock()
+	if err := s.repo.Save(ctx, crop); err != nil {
+		return nil, err
+	}
+	return crop, nil
+}
+
+// SetAutomationBulk aplica el modo automático a varios cultivos; sin ids, a todos.
+func (s *Service) SetAutomationBulk(ctx context.Context, ownerID string, cropIDs []string, enabled bool) ([]Crop, error) {
+	var crops []Crop
+	if len(cropIDs) == 0 {
+		list, err := s.List(ctx, ownerID)
+		if err != nil {
+			return nil, err
+		}
+		crops = list
+	} else {
+		seen := make(map[string]bool)
+		for _, id := range cropIDs {
+			if seen[id] {
+				continue
+			}
+			seen[id] = true
+			crop, err := s.GetOwned(ctx, ownerID, id)
+			if err != nil {
+				return nil, err
+			}
+			crops = append(crops, *crop)
+		}
+	}
+	now := s.clock()
+	for i := range crops {
+		crops[i].AutomationEnabled = enabled
+		crops[i].UpdatedAt = now
+		if err := s.repo.Save(ctx, &crops[i]); err != nil {
+			return nil, err
+		}
+	}
+	return crops, nil
+}
+
+// DeviceInfo devuelve los datos de conexión del dispositivo (sin la clave).
+func (s *Service) DeviceInfo(ctx context.Context, ownerID, cropID string) (DeviceCredentialsResponse, error) {
+	crop, err := s.getOwnedReal(ctx, ownerID, cropID)
+	if err != nil {
+		return DeviceCredentialsResponse{}, err
+	}
+	return s.credentials(crop, ""), nil
+}
+
+// RotateDeviceKey genera una nueva clave y desconecta la sesión anterior.
+func (s *Service) RotateDeviceKey(ctx context.Context, ownerID, cropID string) (DeviceCredentialsResponse, error) {
+	crop, err := s.getOwnedReal(ctx, ownerID, cropID)
+	if err != nil {
+		return DeviceCredentialsResponse{}, err
+	}
+	key := newDeviceKey()
+	cipher, err := s.encryptor.Encrypt(key)
+	if err != nil {
+		return DeviceCredentialsResponse{}, err
+	}
+	now := s.clock()
+	if crop.Device == nil {
+		crop.Device = &Device{}
+	}
+	crop.Device.KeyCiphertext = cipher
+	crop.Device.KeyRotatedAt = &now
+	crop.UpdatedAt = now
+	if err := s.repo.Save(ctx, crop); err != nil {
+		return DeviceCredentialsResponse{}, err
+	}
+	if err := s.provisioner.Provision(ctx, crop.HexID(), key, true); err != nil {
+		slog.Warn("no se pudo reaprovisionar el dispositivo", "cropId", crop.HexID(), "err", err)
+	}
+	s.bus.Publish(DeviceKeyRotatedEvent{CropID: crop.HexID()})
+	return s.credentials(crop, key), nil
+}
+
+// DeviceKey devuelve la clave en claro, solo para servicios internos (simulador).
+func (s *Service) DeviceKey(crop *Crop) (string, bool) {
+	if crop.Device == nil || crop.Device.KeyCiphertext == "" {
+		return "", false
+	}
+	key, err := s.encryptor.Decrypt(crop.Device.KeyCiphertext)
+	if err != nil {
+		return "", false
+	}
+	return key, true
+}
+
+// Delete borra un cultivo del dueño con todos sus datos.
+func (s *Service) Delete(ctx context.Context, ownerID, cropID string) error {
+	crop, err := s.GetOwned(ctx, ownerID, cropID)
+	if err != nil {
+		return err
+	}
+	return s.deleteCascade(ctx, crop)
+}
+
+// DeleteAllOwnedBy borra todos los cultivos de una cuenta (borrado en cascada).
+func (s *Service) DeleteAllOwnedBy(ctx context.Context, ownerID string) error {
+	crops, err := s.List(ctx, ownerID)
+	if err != nil {
+		return err
+	}
+	for i := range crops {
+		if err := s.deleteCascade(ctx, &crops[i]); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+// MarkDeviceSeen actualiza el estado del dispositivo (implementa readings.Crops).
+func (s *Service) MarkDeviceSeen(ctx context.Context, cropID string, online *bool) {
+	oid, ok := objectid.Parse(cropID)
+	if !ok {
+		return
+	}
+	if err := s.repo.MarkDeviceSeen(ctx, oid, online, s.clock()); err != nil {
+		slog.Warn("no se pudo actualizar el estado del dispositivo", "cropId", cropID, "err", err)
+	}
+}
+
+// UpdateDeviceStatus marca el dispositivo en línea o no y avisa al desconectarse.
+func (s *Service) UpdateDeviceStatus(ctx context.Context, cropID string, online bool) {
+	crop, err := s.Find(ctx, cropID)
+	if err != nil || crop == nil {
+		return
+	}
+	s.MarkDeviceSeen(ctx, cropID, &online)
+	if !online {
+		_, _ = s.notifier.NotifyOnce(ctx, "offline:"+cropID, time.Hour, crop.OwnerID.Hex(), cropID,
+			notifications.TypeDevice, "Cultivo desconectado",
+			"«"+crop.Name+"» perdió la conexión con SmartPot.")
+	}
+}
+
+// UpdateHealth guarda la última evaluación de salud del cultivo.
+func (s *Service) UpdateHealth(ctx context.Context, cropID string, health CropHealth) {
+	oid, ok := objectid.Parse(cropID)
+	if !ok {
+		return
+	}
+	if err := s.repo.UpdateHealth(ctx, oid, &health); err != nil {
+		slog.Warn("no se pudo actualizar la salud del cultivo", "cropId", cropID, "err", err)
+	}
+}
+
+// Exists indica si el cultivo existe (implementa readings.Crops).
+func (s *Service) Exists(ctx context.Context, cropID string) bool {
+	crop, err := s.Find(ctx, cropID)
+	return err == nil && crop != nil
+}
+
+// RequireOwned comprueba el dueño del cultivo (implementa readings.Crops).
+func (s *Service) RequireOwned(ctx context.Context, ownerID, cropID string) error {
+	_, err := s.GetOwned(ctx, ownerID, cropID)
+	return err
+}
+
+func (s *Service) getOwnedReal(ctx context.Context, ownerID, cropID string) (*Crop, error) {
+	crop, err := s.GetOwned(ctx, ownerID, cropID)
+	if err != nil {
+		return nil, err
+	}
+	if crop.IsVirtual() {
+		return nil, apperr.BadRequest(virtualHasNoDevice)
+	}
+	return crop, nil
+}
+
+func (s *Service) deleteCascade(ctx context.Context, crop *Crop) error {
+	if err := s.repo.Delete(ctx, crop.ID); err != nil {
+		return err
+	}
+	if err := s.provisioner.Deprovision(ctx, crop.HexID()); err != nil {
+		slog.Warn("no se pudo retirar el dispositivo del broker", "cropId", crop.HexID(), "err", err)
+	}
+	s.bus.Publish(DeletedEvent{CropID: crop.HexID(), OwnerID: crop.OwnerID.Hex()})
+	slog.Info("cultivo eliminado", "cropId", crop.HexID())
+	return nil
+}
+
+func (s *Service) credentials(crop *Crop, key string) DeviceCredentialsResponse {
+	id := crop.HexID()
+	var rotatedAt *time.Time
+	if crop.Device != nil {
+		rotatedAt = crop.Device.KeyRotatedAt
+	}
+	return DeviceCredentialsResponse{
+		Host:         s.mqttPublic.Host,
+		Port:         s.mqttPublic.Port,
+		TLS:          s.mqttPublic.TLS,
+		WebsocketURL: s.mqttPublic.WebSocketURL,
+		Username:     id,
+		Key:          key,
+		Topics: DeviceTopics{
+			Telemetry:  s.topics.Telemetry(id),
+			Commands:   s.topics.Commands(id),
+			CommandAck: s.topics.CommandAck(id),
+			Status:     s.topics.Status(id),
+		},
+		KeyRotatedAt: rotatedAt,
+	}
+}
+
+func newDeviceKey() string {
+	b := make([]byte, 24)
+	_, _ = rand.Read(b)
+	return base64.RawURLEncoding.EncodeToString(b)
+}
