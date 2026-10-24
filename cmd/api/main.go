@@ -16,13 +16,16 @@ import (
 	"github.com/SmartPotTech/SmartPot-API-Go/internal/auth"
 	"github.com/SmartPotTech/SmartPot-API-Go/internal/cache"
 	"github.com/SmartPotTech/SmartPot-API-Go/internal/config"
+	"github.com/SmartPotTech/SmartPot-API-Go/internal/crops"
 	"github.com/SmartPotTech/SmartPot-API-Go/internal/health"
 	"github.com/SmartPotTech/SmartPot-API-Go/internal/httpserver"
 	"github.com/SmartPotTech/SmartPot-API-Go/internal/mail"
 	"github.com/SmartPotTech/SmartPot-API-Go/internal/mongodb"
+	"github.com/SmartPotTech/SmartPot-API-Go/internal/mqtt"
 	"github.com/SmartPotTech/SmartPot-API-Go/internal/notifications"
 	"github.com/SmartPotTech/SmartPot-API-Go/internal/platform/events"
 	"github.com/SmartPotTech/SmartPot-API-Go/internal/platform/logging"
+	"github.com/SmartPotTech/SmartPot-API-Go/internal/readings"
 	"github.com/SmartPotTech/SmartPot-API-Go/internal/security"
 	"github.com/SmartPotTech/SmartPot-API-Go/internal/users"
 )
@@ -61,6 +64,10 @@ func run() error {
 	bus := events.NewBus()
 
 	tokenService := security.NewTokenService(cfg.Security.JWTSecret, cfg.Security.JWTExpiration)
+	encryptor, err := security.NewEncryptor(cfg.Security.AESKey)
+	if err != nil {
+		return err
+	}
 
 	mailer, err := mail.NewMailer(cfg.Mail, cfg.Server.WebBaseURL, logger)
 	if err != nil {
@@ -71,15 +78,38 @@ func run() error {
 	userRepo := users.NewRepository(db)
 	tokenRepo := auth.NewTokenRepository(db)
 	notificationRepo := notifications.NewRepository(db)
-	ensureIndexes(logger, userRepo.EnsureIndexes, tokenRepo.EnsureIndexes, notificationRepo.EnsureIndexes)
+	cropRepo := crops.NewRepository(db)
+	readingRepo := readings.NewRepository(db)
+	ensureIndexes(logger, userRepo.EnsureIndexes, tokenRepo.EnsureIndexes, notificationRepo.EnsureIndexes,
+		cropRepo.EnsureIndexes, readingRepo.EnsureIndexes)
 
 	// Servicios.
 	notificationService := notifications.NewService(notificationRepo, cacheStore, bus, clock)
+	topics := mqtt.NewTopicResolver(cfg.MQTT.TopicPrefix)
+	mqttPublic := crops.MQTTPublic{Host: cfg.MQTT.PublicHost, Port: cfg.MQTT.PublicPort, TLS: cfg.MQTT.PublicTLS, WebSocketURL: cfg.MQTT.WebSocketURL}
+	cropService := crops.NewService(cropRepo, encryptor, topics, mqttPublic, noopProvisioner{}, noopActuatorSeeder{},
+		notificationService, bus, clock)
+	readingService := readings.NewService(readingRepo, cropService, cacheStore, bus, clock,
+		cfg.Readings.MinInterval, cfg.Readings.MaxPageSize)
+	weatherService := crops.NewWeatherService(noopWeatherSource{}, cacheStore)
+
 	userService := users.NewService(userRepo, clock)
 	userService.AddAccountDeleter(notificationService.DeleteAllForUser)
 	userService.AddAccountDeleter(tokenRepo.DeleteByUserID)
+	userService.AddAccountDeleter(cropService.DeleteAllOwnedBy)
 	authService := auth.NewService(userRepo, tokenRepo, tokenService, mailer, notificationService, clock,
 		cfg.Security.PasswordResetExpiration)
+
+	// Borrado en cascada de los datos de un cultivo.
+	events.Subscribe(bus, func(e crops.DeletedEvent) {
+		ctx := context.Background()
+		if err := readingService.DeleteByCrop(ctx, e.CropID); err != nil {
+			logger.Warn("no se pudieron borrar las lecturas del cultivo", "cropId", e.CropID, "err", err)
+		}
+		if err := notificationService.DeleteAllForCrop(ctx, e.CropID); err != nil {
+			logger.Warn("no se pudieron borrar las notificaciones del cultivo", "cropId", e.CropID, "err", err)
+		}
+	})
 
 	// Servidor HTTP.
 	rateLimiter := security.NewRateLimiter(cacheStore, cfg.Security.RateLimitPerMinute, cfg.Security.AuthRateLimitPerMinute)
@@ -105,6 +135,8 @@ func run() error {
 	authed.Use(tokenService.Guard())
 	users.NewHandler(userService).Register(authed)
 	notifications.NewHandler(notificationService).Register(authed)
+	crops.NewHandler(cropService, readingService, noopVirtualManager{}, weatherService).Register(authed)
+	readings.NewHandler(readingService).Register(authed)
 
 	// Purga de la caché local, sin cron en el servidor.
 	purgeCtx, stopPurge := context.WithCancel(context.Background())
