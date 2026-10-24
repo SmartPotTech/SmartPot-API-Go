@@ -6,19 +6,25 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"log/slog"
 	"net/http"
 	"os"
 	"os/signal"
 	"syscall"
 	"time"
 
+	"github.com/SmartPotTech/SmartPot-API-Go/internal/auth"
 	"github.com/SmartPotTech/SmartPot-API-Go/internal/cache"
 	"github.com/SmartPotTech/SmartPot-API-Go/internal/config"
 	"github.com/SmartPotTech/SmartPot-API-Go/internal/health"
 	"github.com/SmartPotTech/SmartPot-API-Go/internal/httpserver"
+	"github.com/SmartPotTech/SmartPot-API-Go/internal/mail"
 	"github.com/SmartPotTech/SmartPot-API-Go/internal/mongodb"
+	"github.com/SmartPotTech/SmartPot-API-Go/internal/notifications"
+	"github.com/SmartPotTech/SmartPot-API-Go/internal/platform/events"
 	"github.com/SmartPotTech/SmartPot-API-Go/internal/platform/logging"
 	"github.com/SmartPotTech/SmartPot-API-Go/internal/security"
+	"github.com/SmartPotTech/SmartPot-API-Go/internal/users"
 )
 
 func main() {
@@ -37,20 +43,46 @@ func run() error {
 	logger := logging.Setup(cfg.Server.LogLevel)
 	logger.Info("iniciando SmartPot-API", "port", cfg.Server.Port)
 
+	clock := func() time.Time { return time.Now().UTC() }
+
 	connectCtx, cancelConnect := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancelConnect()
 	mongoClient, err := mongodb.Connect(connectCtx, cfg.Mongo.URI)
 	if err != nil {
 		return err
 	}
+	db := mongoClient.DB
 
 	redisClient := cache.NewRedisClient(
 		fmt.Sprintf("%s:%d", cfg.Redis.Host, cfg.Redis.Port),
 		cfg.Redis.Username, cfg.Redis.Password, cfg.Redis.Database, cfg.Redis.Timeout)
 	cacheStore := cache.NewStore(redisClient)
 
-	rateLimiter := security.NewRateLimiter(cacheStore, cfg.Security.RateLimitPerMinute, cfg.Security.AuthRateLimitPerMinute)
+	bus := events.NewBus()
 
+	tokenService := security.NewTokenService(cfg.Security.JWTSecret, cfg.Security.JWTExpiration)
+
+	mailer, err := mail.NewMailer(cfg.Mail, cfg.Server.WebBaseURL, logger)
+	if err != nil {
+		return err
+	}
+
+	// Repositorios.
+	userRepo := users.NewRepository(db)
+	tokenRepo := auth.NewTokenRepository(db)
+	notificationRepo := notifications.NewRepository(db)
+	ensureIndexes(logger, userRepo.EnsureIndexes, tokenRepo.EnsureIndexes, notificationRepo.EnsureIndexes)
+
+	// Servicios.
+	notificationService := notifications.NewService(notificationRepo, cacheStore, bus, clock)
+	userService := users.NewService(userRepo, clock)
+	userService.AddAccountDeleter(notificationService.DeleteAllForUser)
+	userService.AddAccountDeleter(tokenRepo.DeleteByUserID)
+	authService := auth.NewService(userRepo, tokenRepo, tokenService, mailer, notificationService, clock,
+		cfg.Security.PasswordResetExpiration)
+
+	// Servidor HTTP.
+	rateLimiter := security.NewRateLimiter(cacheStore, cfg.Security.RateLimitPerMinute, cfg.Security.AuthRateLimitPerMinute)
 	engine := httpserver.New(logger)
 	engine.Use(security.CORS(cfg.Security.CORSAllowedOrigins), rateLimiter.Middleware())
 
@@ -64,6 +96,15 @@ func run() error {
 		// Broker, IA y simulador se cablean en sus fases.
 	}
 	engine.GET("/health", checker.Handler())
+
+	// Rutas públicas y autenticadas bajo /api/v1.
+	v1 := engine.Group("/api/v1")
+	auth.NewHandler(authService).Register(v1)
+
+	authed := v1.Group("")
+	authed.Use(tokenService.Guard())
+	users.NewHandler(userService).Register(authed)
+	notifications.NewHandler(notificationService).Register(authed)
 
 	// Purga de la caché local, sin cron en el servidor.
 	purgeCtx, stopPurge := context.WithCancel(context.Background())
@@ -119,4 +160,16 @@ func run() error {
 	}
 	logger.Info("apagado completo")
 	return nil
+}
+
+// ensureIndexes crea los índices de cada repositorio al arrancar; los errores se
+// registran pero no impiden el arranque (la base puede estar aún iniciando).
+func ensureIndexes(logger *slog.Logger, ensurers ...func(context.Context) error) {
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+	for _, ensure := range ensurers {
+		if err := ensure(ctx); err != nil {
+			logger.Warn("no se pudieron crear índices", "err", err)
+		}
+	}
 }
