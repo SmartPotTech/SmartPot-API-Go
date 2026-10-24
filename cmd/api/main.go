@@ -13,8 +13,10 @@ import (
 	"syscall"
 	"time"
 
+	"github.com/SmartPotTech/SmartPot-API-Go/internal/actuators"
 	"github.com/SmartPotTech/SmartPot-API-Go/internal/auth"
 	"github.com/SmartPotTech/SmartPot-API-Go/internal/cache"
+	"github.com/SmartPotTech/SmartPot-API-Go/internal/commands"
 	"github.com/SmartPotTech/SmartPot-API-Go/internal/config"
 	"github.com/SmartPotTech/SmartPot-API-Go/internal/crops"
 	"github.com/SmartPotTech/SmartPot-API-Go/internal/health"
@@ -80,8 +82,10 @@ func run() error {
 	notificationRepo := notifications.NewRepository(db)
 	cropRepo := crops.NewRepository(db)
 	readingRepo := readings.NewRepository(db)
+	actuatorRepo := actuators.NewRepository(db)
+	commandRepo := commands.NewRepository(db)
 	ensureIndexes(logger, userRepo.EnsureIndexes, tokenRepo.EnsureIndexes, notificationRepo.EnsureIndexes,
-		cropRepo.EnsureIndexes, readingRepo.EnsureIndexes)
+		cropRepo.EnsureIndexes, readingRepo.EnsureIndexes, actuatorRepo.EnsureIndexes, commandRepo.EnsureIndexes)
 
 	// Servicios.
 	notificationService := notifications.NewService(notificationRepo, cacheStore, bus, clock)
@@ -92,6 +96,10 @@ func run() error {
 	readingService := readings.NewService(readingRepo, cropService, cacheStore, bus, clock,
 		cfg.Readings.MinInterval, cfg.Readings.MaxPageSize)
 	weatherService := crops.NewWeatherService(noopWeatherSource{}, cacheStore)
+	actuatorService := actuators.NewService(actuatorRepo, cropService, clock)
+	cropService.SetActuatorSeeder(actuatorService)
+	commandService := commands.NewService(commandRepo, cropService, actuatorService, notificationService, clock,
+		cfg.MQTT.CommandTimeout)
 
 	userService := users.NewService(userRepo, clock)
 	userService.AddAccountDeleter(notificationService.DeleteAllForUser)
@@ -105,6 +113,12 @@ func run() error {
 		ctx := context.Background()
 		if err := readingService.DeleteByCrop(ctx, e.CropID); err != nil {
 			logger.Warn("no se pudieron borrar las lecturas del cultivo", "cropId", e.CropID, "err", err)
+		}
+		if err := commandService.DeleteByCrop(ctx, e.CropID); err != nil {
+			logger.Warn("no se pudieron borrar los comandos del cultivo", "cropId", e.CropID, "err", err)
+		}
+		if err := actuatorService.DeleteByCrop(ctx, e.CropID); err != nil {
+			logger.Warn("no se pudieron borrar los actuadores del cultivo", "cropId", e.CropID, "err", err)
 		}
 		if err := notificationService.DeleteAllForCrop(ctx, e.CropID); err != nil {
 			logger.Warn("no se pudieron borrar las notificaciones del cultivo", "cropId", e.CropID, "err", err)
@@ -137,22 +151,14 @@ func run() error {
 	notifications.NewHandler(notificationService).Register(authed)
 	crops.NewHandler(cropService, readingService, noopVirtualManager{}, weatherService).Register(authed)
 	readings.NewHandler(readingService).Register(authed)
+	actuators.NewHandler(actuatorService, clock).Register(authed)
+	commands.NewHandler(commandService).Register(authed)
 
-	// Purga de la caché local, sin cron en el servidor.
-	purgeCtx, stopPurge := context.WithCancel(context.Background())
-	defer stopPurge()
-	go func() {
-		ticker := time.NewTicker(time.Minute)
-		defer ticker.Stop()
-		for {
-			select {
-			case <-purgeCtx.Done():
-				return
-			case <-ticker.C:
-				cacheStore.PurgeExpired()
-			}
-		}
-	}()
+	// Trabajos en segundo plano (sin cron en el servidor).
+	jobsCtx, stopJobs := context.WithCancel(context.Background())
+	defer stopJobs()
+	go tick(jobsCtx, time.Minute, cacheStore.PurgeExpired)
+	go tick(jobsCtx, 30*time.Second, func() { commandService.ExpireStale(context.Background()) })
 
 	srv := &http.Server{
 		Addr:              fmt.Sprintf(":%d", cfg.Server.Port),
@@ -183,7 +189,7 @@ func run() error {
 	if err := srv.Shutdown(shutdownCtx); err != nil {
 		logger.Error("apagado del servidor con error", "err", err)
 	}
-	stopPurge()
+	stopJobs()
 	if err := cacheStore.Close(); err != nil {
 		logger.Error("cierre de Redis con error", "err", err)
 	}
@@ -192,6 +198,21 @@ func run() error {
 	}
 	logger.Info("apagado completo")
 	return nil
+}
+
+// tick ejecuta fn cada intervalo hasta que se cancela el contexto. Reemplaza a
+// los @Scheduled de Spring sin usar cron en el servidor.
+func tick(ctx context.Context, interval time.Duration, fn func()) {
+	ticker := time.NewTicker(interval)
+	defer ticker.Stop()
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case <-ticker.C:
+			fn()
+		}
+	}
 }
 
 // ensureIndexes crea los índices de cada repositorio al arrancar; los errores se
