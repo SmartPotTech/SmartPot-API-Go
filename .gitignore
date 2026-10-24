@@ -1,0 +1,20 @@
+# Binarios y artefactos de compilación
+/bin/
+/dist/
+*.exe
+*.test
+*.out
+
+# Entorno local (solo se versiona el ejemplo)
+.env
+.env.*
+!.env.example
+
+# Editores
+.idea/
+.vscode/
+*.iml
+
+# Sistema
+.DS_Store
+Thumbs.db
