@@ -15,6 +15,16 @@ type Validatable interface {
 	Validate() validation.Fields
 }
 
+// DecodeJSON decodifica el cuerpo JSON en dst sin validarlo. Si el JSON es
+// inválido responde 400 y devuelve false (el llamador debe detenerse).
+func DecodeJSON(c *gin.Context, dst any) bool {
+	if err := json.NewDecoder(c.Request.Body).Decode(dst); err != nil {
+		writeError(c, http.StatusBadRequest, "El cuerpo de la solicitud no es un JSON válido")
+		return false
+	}
+	return true
+}
+
 // Bind decodifica el cuerpo JSON en req y lo valida. Si el JSON es inválido
 // responde 400 con el mismo mensaje que la versión en Java; si falla la
 // validación responde 400 con el detalle por campo. Devuelve false si ya
