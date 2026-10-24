@@ -73,6 +73,29 @@ func (b *Builder) Pattern(field, value string, pattern *regexp.Regexp, message s
 	return b
 }
 
+// Required exige que un valor esté presente (equivalente a @NotNull).
+func (b *Builder) Required(field string, present bool, message string) *Builder {
+	if !present {
+		b.addIfAbsent(field, message)
+	}
+	return b
+}
+
+// DecimalRange exige que un número opcional esté dentro de [min, max]
+// (equivalente a @DecimalMin/@DecimalMax); nil se considera válido.
+func (b *Builder) DecimalRange(field string, value *float64, min, max float64, message string) *Builder {
+	if value != nil && (*value < min || *value > max) {
+		b.addIfAbsent(field, message)
+	}
+	return b
+}
+
+// Add registra un error a medida (primer error por campo gana).
+func (b *Builder) Add(field, message string) *Builder {
+	b.addIfAbsent(field, message)
+	return b
+}
+
 // OK indica si no hubo errores.
 func (b *Builder) OK() bool {
 	return len(b.fields) == 0
