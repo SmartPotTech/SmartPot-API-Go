@@ -235,9 +235,12 @@ docker build -t smartpot-api-go .
 docker pull ghcr.io/smartpottech/smartpot-api-go:latest
 ```
 
-La imagen compila el binario estático en una etapa aparte, corre como el usuario `1000`, admite sistema de archivos de
-solo lectura (no escribe en disco) y trae un `HEALTHCHECK` sobre `/health`. Cada cambio en `main` pasa por el CI y
-publica la imagen en GHCR (y en Docker Hub como réplica cuando el repositorio tiene credenciales).
+La imagen compila el binario estático en una etapa aparte y lo copia a una imagen final `scratch`: sin shell, sin gestor
+de paquetes y sin herramientas de red, así un contenedor comprometido no encuentra nada que aprovechar. Corre como el
+usuario `1000`, admite sistema de archivos de solo lectura (no escribe en disco) y el `HEALTHCHECK` lo resuelve el propio
+binario (`smartpot-api healthcheck`), sin `wget` ni `curl`. La zona horaria va incrustada en el binario y solo se suma el
+bundle de certificados CA para las conexiones TLS. Cada cambio en `main` pasa por el CI y publica la imagen en GHCR (y en
+Docker Hub como réplica cuando el repositorio tiene credenciales).
 
 ## Documentación
 
