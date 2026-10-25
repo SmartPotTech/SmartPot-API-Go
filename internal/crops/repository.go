@@ -55,6 +55,20 @@ func (r *Repository) FindByID(ctx context.Context, id primitive.ObjectID) (*Crop
 	return r.findOne(ctx, bson.M{"_id": id})
 }
 
+// FindWithDeviceKey devuelve los cultivos que tienen clave de dispositivo (para
+// sincronizar sus cuentas en el broker al reconectar).
+func (r *Repository) FindWithDeviceKey(ctx context.Context) ([]Crop, error) {
+	cur, err := r.coll.Find(ctx, bson.M{"device.keyCiphertext": bson.M{"$exists": true, "$ne": nil}})
+	if err != nil {
+		return nil, err
+	}
+	out := make([]Crop, 0)
+	if err := cur.All(ctx, &out); err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
 // CountByOwner cuenta los cultivos del dueño.
 func (r *Repository) CountByOwner(ctx context.Context, ownerID primitive.ObjectID) (int64, error) {
 	return r.coll.CountDocuments(ctx, bson.M{"ownerId": ownerID})

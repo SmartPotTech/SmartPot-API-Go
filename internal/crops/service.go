@@ -9,7 +9,6 @@ import (
 	"strings"
 	"time"
 
-	"github.com/SmartPotTech/SmartPot-API-Go/internal/mqtt"
 	"github.com/SmartPotTech/SmartPot-API-Go/internal/notifications"
 	"github.com/SmartPotTech/SmartPot-API-Go/internal/platform/apperr"
 	"github.com/SmartPotTech/SmartPot-API-Go/internal/platform/events"
@@ -45,6 +44,7 @@ type MQTTPublic struct {
 	Port         int
 	TLS          bool
 	WebSocketURL string
+	TopicPrefix  string
 }
 
 // CreatedCrop es el resultado de crear un cultivo.
@@ -57,7 +57,6 @@ type CreatedCrop struct {
 type Service struct {
 	repo        *Repository
 	encryptor   *security.Encryptor
-	topics      *mqtt.TopicResolver
 	mqttPublic  MQTTPublic
 	provisioner DeviceProvisioner
 	actuators   ActuatorSeeder
@@ -67,11 +66,11 @@ type Service struct {
 }
 
 // NewService crea el servicio de cultivos.
-func NewService(repo *Repository, encryptor *security.Encryptor, topics *mqtt.TopicResolver, mqttPublic MQTTPublic,
+func NewService(repo *Repository, encryptor *security.Encryptor, mqttPublic MQTTPublic,
 	provisioner DeviceProvisioner, actuators ActuatorSeeder, notifier *notifications.Service, bus *events.Bus,
 	clock func() time.Time) *Service {
 	return &Service{
-		repo: repo, encryptor: encryptor, topics: topics, mqttPublic: mqttPublic,
+		repo: repo, encryptor: encryptor, mqttPublic: mqttPublic,
 		provisioner: provisioner, actuators: actuators, notifier: notifier, bus: bus, clock: clock,
 	}
 }
@@ -316,6 +315,28 @@ func (s *Service) RotateDeviceKey(ctx context.Context, ownerID, cropID string) (
 	return s.credentials(crop, key), nil
 }
 
+// DeviceAccount es la cuenta MQTT de un dispositivo (id del cultivo y clave en claro).
+type DeviceAccount struct {
+	CropID string
+	Key    string
+}
+
+// DeviceAccounts devuelve las cuentas de todos los cultivos con clave, para
+// sincronizar el broker al (re)conectar.
+func (s *Service) DeviceAccounts(ctx context.Context) ([]DeviceAccount, error) {
+	cropsList, err := s.repo.FindWithDeviceKey(ctx)
+	if err != nil {
+		return nil, err
+	}
+	out := make([]DeviceAccount, 0, len(cropsList))
+	for i := range cropsList {
+		if key, ok := s.DeviceKey(&cropsList[i]); ok {
+			out = append(out, DeviceAccount{CropID: cropsList[i].HexID(), Key: key})
+		}
+	}
+	return out, nil
+}
+
 // DeviceKey devuelve la clave en claro, solo para servicios internos (simulador).
 func (s *Service) DeviceKey(crop *Crop) (string, bool) {
 	if crop.Device == nil || crop.Device.KeyCiphertext == "" {
@@ -428,6 +449,7 @@ func (s *Service) credentials(crop *Crop, key string) DeviceCredentialsResponse 
 	if crop.Device != nil {
 		rotatedAt = crop.Device.KeyRotatedAt
 	}
+	prefix := s.mqttPublic.TopicPrefix
 	return DeviceCredentialsResponse{
 		Host:         s.mqttPublic.Host,
 		Port:         s.mqttPublic.Port,
@@ -436,10 +458,10 @@ func (s *Service) credentials(crop *Crop, key string) DeviceCredentialsResponse 
 		Username:     id,
 		Key:          key,
 		Topics: DeviceTopics{
-			Telemetry:  s.topics.Telemetry(id),
-			Commands:   s.topics.Commands(id),
-			CommandAck: s.topics.CommandAck(id),
-			Status:     s.topics.Status(id),
+			Telemetry:  prefix + "/" + id + "/telemetry",
+			Commands:   prefix + "/" + id + "/commands",
+			CommandAck: prefix + "/" + id + "/commands/ack",
+			Status:     prefix + "/" + id + "/status",
 		},
 		KeyRotatedAt: rotatedAt,
 	}
