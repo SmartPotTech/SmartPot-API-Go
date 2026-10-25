@@ -1,2 +1,19 @@
-# Auto detect text files and perform LF normalization
-* text=auto
+# Normaliza los finales de línea a LF en todo el repositorio (incluido el árbol
+# de trabajo), para que gofmt y la compilación sean iguales en Windows y Linux.
+* text=auto eol=lf
+
+*.go    text eol=lf
+go.mod  text eol=lf
+go.sum  text eol=lf
+*.yml   text eol=lf
+*.yaml  text eol=lf
+*.md    text eol=lf
+*.sh    text eol=lf
+*.json  text eol=lf
+*.env   text eol=lf
+Dockerfile text eol=lf
+
+# Binarios: sin conversión.
+*.png binary
+*.jpg binary
+*.ico binary
