@@ -11,6 +11,7 @@ import (
 	"github.com/SmartPotTech/SmartPot-API-Go/internal/platform/apperr"
 	"github.com/SmartPotTech/SmartPot-API-Go/internal/platform/events"
 	"github.com/SmartPotTech/SmartPot-API-Go/internal/platform/objectid"
+	"go.mongodb.org/mongo-driver/bson/primitive"
 )
 
 const exportLimit = 50000
@@ -163,6 +164,17 @@ func (s *Service) ExportCSV(ctx context.Context, ownerID, cropID string, from, t
 		b.WriteByte('\n')
 	}
 	return b.String(), nil
+}
+
+// SeriesAverages calcula promedios por cultivo e intervalo (para el panel general).
+func (s *Service) SeriesAverages(ctx context.Context, cropIDs []string, metric string, from time.Time, bucketMinutes int) ([]Bucket, error) {
+	oids := make([]primitive.ObjectID, 0, len(cropIDs))
+	for _, id := range cropIDs {
+		if oid, ok := objectid.Parse(id); ok {
+			oids = append(oids, oid)
+		}
+	}
+	return s.repo.SeriesAverages(ctx, oids, metric, from, bucketMinutes)
 }
 
 // DeleteByCrop borra las lecturas de un cultivo (borrado en cascada por evento).
