@@ -120,6 +120,35 @@ func (r *Repository) UpdateHealth(ctx context.Context, id primitive.ObjectID, he
 	return err
 }
 
+// BackfillKind fija el tipo en los cultivos sin tipo cuyo id esté en la lista.
+func (r *Repository) BackfillKind(ctx context.Context, ids []primitive.ObjectID, kind CropKind) error {
+	if len(ids) == 0 {
+		return nil
+	}
+	_, err := r.coll.UpdateMany(ctx, bson.M{"kind": bson.M{"$exists": false}, "_id": bson.M{"$in": ids}},
+		bson.M{"$set": bson.M{"kind": kind}})
+	return err
+}
+
+// BackfillKindAll fija el tipo en todos los cultivos que aún no lo tienen.
+func (r *Repository) BackfillKindAll(ctx context.Context, kind CropKind) error {
+	_, err := r.coll.UpdateMany(ctx, bson.M{"kind": bson.M{"$exists": false}}, bson.M{"$set": bson.M{"kind": kind}})
+	return err
+}
+
+// BackfillFormAll fija la forma en todos los cultivos que aún no la tienen.
+func (r *Repository) BackfillFormAll(ctx context.Context, form CropForm) error {
+	_, err := r.coll.UpdateMany(ctx, bson.M{"form": bson.M{"$exists": false}}, bson.M{"$set": bson.M{"form": form}})
+	return err
+}
+
+// BackfillPlacement fija el lugar de un cultivo si aún no lo tiene.
+func (r *Repository) BackfillPlacement(ctx context.Context, id primitive.ObjectID, placement geo.Placement) error {
+	_, err := r.coll.UpdateOne(ctx, bson.M{"_id": id, "placement": bson.M{"$exists": false}},
+		bson.M{"$set": bson.M{"placement": placement}})
+	return err
+}
+
 func (r *Repository) findOne(ctx context.Context, filter bson.M) (*Crop, error) {
 	var crop Crop
 	err := r.coll.FindOne(ctx, filter).Decode(&crop)

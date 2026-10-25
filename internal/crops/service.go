@@ -15,6 +15,7 @@ import (
 	"github.com/SmartPotTech/SmartPot-API-Go/internal/platform/geo"
 	"github.com/SmartPotTech/SmartPot-API-Go/internal/platform/objectid"
 	"github.com/SmartPotTech/SmartPot-API-Go/internal/security"
+	"go.mongodb.org/mongo-driver/bson/primitive"
 )
 
 // MaxCropsPerUser es el máximo de cultivos por cuenta.
@@ -356,6 +357,40 @@ func (s *Service) Delete(ctx context.Context, ownerID, cropID string) error {
 		return err
 	}
 	return s.deleteCascade(ctx, crop)
+}
+
+// PlacementBackfill es el lugar que se completa en un cultivo anterior.
+type PlacementBackfill struct {
+	CropID    string
+	Placement geo.Placement
+}
+
+// Backfill completa el tipo, la forma y el lugar de los cultivos anteriores a
+// estos campos. Es idempotente y corre al arrancar.
+func (s *Service) Backfill(ctx context.Context, virtualCropIDs []string, placements []PlacementBackfill) error {
+	virtualOIDs := make([]primitive.ObjectID, 0, len(virtualCropIDs))
+	for _, id := range virtualCropIDs {
+		if oid, ok := objectid.Parse(id); ok {
+			virtualOIDs = append(virtualOIDs, oid)
+		}
+	}
+	if err := s.repo.BackfillKind(ctx, virtualOIDs, KindVirtual); err != nil {
+		return err
+	}
+	if err := s.repo.BackfillKindAll(ctx, KindReal); err != nil {
+		return err
+	}
+	if err := s.repo.BackfillFormAll(ctx, FormPot); err != nil {
+		return err
+	}
+	for _, p := range placements {
+		if oid, ok := objectid.Parse(p.CropID); ok {
+			if err := s.repo.BackfillPlacement(ctx, oid, p.Placement); err != nil {
+				return err
+			}
+		}
+	}
+	return nil
 }
 
 // DeleteAllOwnedBy borra todos los cultivos de una cuenta (borrado en cascada).
