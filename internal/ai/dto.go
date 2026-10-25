@@ -191,20 +191,21 @@ type FleetRequest struct {
 
 // FleetCrop es un cultivo con su última lectura y sus actuadores.
 type FleetCrop struct {
-	ID        string            `json:"id"`
-	Name      string            `json:"name"`
-	CropType  string            `json:"cropType"`
-	Measures  readings.Measures `json:"measures"`
-	Actuators []string          `json:"actuators"`
+	ID        string             `json:"id"`
+	Name      string             `json:"name"`
+	CropType  string             `json:"cropType"`
+	Measures  *readings.Measures `json:"measures,omitempty"`
+	Actuators []string           `json:"actuators"`
 }
 
-// FleetResponse es el análisis de flota.
+// FleetResponse es el análisis de flota. Las listas se serializan siempre (como
+// [] cuando van vacías), igual que la versión en Java.
 type FleetResponse struct {
 	AverageHealth *float64          `json:"averageHealth,omitempty"`
-	Crops         []FleetCropResult `json:"crops,omitempty"`
-	SharedIssues  []SharedIssue     `json:"sharedIssues,omitempty"`
-	Groups        []Group           `json:"groups,omitempty"`
-	Actions       []FleetAction     `json:"actions,omitempty"`
+	Crops         []FleetCropResult `json:"crops"`
+	SharedIssues  []SharedIssue     `json:"sharedIssues"`
+	Groups        []Group           `json:"groups"`
+	Actions       []FleetAction     `json:"actions"`
 	Summary       string            `json:"summary,omitempty"`
 }
 
