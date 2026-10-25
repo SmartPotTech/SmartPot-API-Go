@@ -217,6 +217,17 @@ func (s *Service) Acknowledge(ctx context.Context, cropID string, ack AckMessage
 	}
 }
 
+// CountSince cuenta los comandos de varios cultivos desde un instante (panel general).
+func (s *Service) CountSince(ctx context.Context, cropIDs []string, since time.Time) (int64, error) {
+	oids := make([]primitive.ObjectID, 0, len(cropIDs))
+	for _, id := range cropIDs {
+		if oid, ok := objectid.Parse(id); ok {
+			oids = append(oids, oid)
+		}
+	}
+	return s.repo.CountByCropsSince(ctx, oids, since)
+}
+
 // DeleteByCrop borra los comandos de un cultivo (borrado en cascada por evento).
 func (s *Service) DeleteByCrop(ctx context.Context, cropID string) error {
 	oid, ok := objectid.Parse(cropID)
