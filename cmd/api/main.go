@@ -90,8 +90,9 @@ func run() error {
 	// Servicios.
 	notificationService := notifications.NewService(notificationRepo, cacheStore, bus, clock)
 	topics := mqtt.NewTopicResolver(cfg.MQTT.TopicPrefix)
-	mqttPublic := crops.MQTTPublic{Host: cfg.MQTT.PublicHost, Port: cfg.MQTT.PublicPort, TLS: cfg.MQTT.PublicTLS, WebSocketURL: cfg.MQTT.WebSocketURL}
-	cropService := crops.NewService(cropRepo, encryptor, topics, mqttPublic, noopProvisioner{}, noopActuatorSeeder{},
+	mqttPublic := crops.MQTTPublic{Host: cfg.MQTT.PublicHost, Port: cfg.MQTT.PublicPort, TLS: cfg.MQTT.PublicTLS,
+		WebSocketURL: cfg.MQTT.WebSocketURL, TopicPrefix: cfg.MQTT.TopicPrefix}
+	cropService := crops.NewService(cropRepo, encryptor, mqttPublic, noopProvisioner{}, noopActuatorSeeder{},
 		notificationService, bus, clock)
 	readingService := readings.NewService(readingRepo, cropService, cacheStore, bus, clock,
 		cfg.Readings.MinInterval, cfg.Readings.MaxPageSize)
@@ -100,6 +101,16 @@ func run() error {
 	cropService.SetActuatorSeeder(actuatorService)
 	commandService := commands.NewService(commandRepo, cropService, actuatorService, notificationService, clock,
 		cfg.MQTT.CommandTimeout)
+
+	// MQTT: gateway, aprovisionamiento en el broker y enrutado de mensajes.
+	gateway := mqtt.NewGateway(cfg.MQTT, topics, logger)
+	provisioner := mqtt.NewProvisioner(gateway, topics, cropService, logger)
+	mqttHandler := mqtt.NewMessageHandler(topics, readingService, commandService, cropService, provisioner, logger)
+	gateway.SetRouter(mqttHandler.Route)
+	gateway.SetOnConnect(provisioner.OnConnected)
+	cropService.SetProvisioner(provisioner)
+	commandService.SetPublisher(gateway)
+	gateway.Start()
 
 	userService := users.NewService(userRepo, clock)
 	userService.AddAccountDeleter(notificationService.DeleteAllForUser)
@@ -136,8 +147,9 @@ func run() error {
 			defer cancel()
 			return mongoClient.Ping(ctx) == nil
 		},
-		Cache: cacheStore.RedisAvailable,
-		// Broker, IA y simulador se cablean en sus fases.
+		Cache:  cacheStore.RedisAvailable,
+		Broker: func() (bool, bool) { return gateway.IsEnabled(), gateway.IsConnected() },
+		// IA y simulador se cablean en sus fases.
 	}
 	engine.GET("/health", checker.Handler())
 
@@ -190,6 +202,7 @@ func run() error {
 		logger.Error("apagado del servidor con error", "err", err)
 	}
 	stopJobs()
+	gateway.Close()
 	if err := cacheStore.Close(); err != nil {
 		logger.Error("cierre de Redis con error", "err", err)
 	}
