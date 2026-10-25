@@ -1,15 +1,10 @@
 package main
 
-import (
-	"context"
+import "context"
 
-	"github.com/SmartPotTech/SmartPot-API-Go/internal/platform/geo"
-	"github.com/SmartPotTech/SmartPot-API-Go/internal/virtualdevices"
-)
-
-// Implementaciones vacías de los colaboradores que todavía no existen. Se
-// reemplazan por las reales al construir sus fases: aprovisionamiento MQTT
-// (broker), siembra de actuadores y gestión de dispositivos virtuales/clima.
+// Implementaciones vacías de los colaboradores que se fijan por setter después
+// de construir el servicio de cultivos: el aprovisionamiento MQTT (broker) y la
+// siembra de actuadores se reemplazan por los reales al cablearlos.
 
 type noopProvisioner struct{}
 
@@ -19,21 +14,3 @@ func (noopProvisioner) Deprovision(context.Context, string) error             { 
 type noopActuatorSeeder struct{}
 
 func (noopActuatorSeeder) SeedDefaults(context.Context, string, bool) error { return nil }
-
-type noopVirtualManager struct{}
-
-func (noopVirtualManager) CheckCanCreate(context.Context, string, *virtualdevices.VirtualDeviceRequest, *geo.Placement) error {
-	return nil
-}
-
-func (noopVirtualManager) StartFor(context.Context, string, *virtualdevices.VirtualDeviceRequest) error {
-	return nil
-}
-
-type noopWeatherSource struct{}
-
-func (noopWeatherSource) IsAvailable() bool { return false }
-
-func (noopWeatherSource) Weather(context.Context, float64, float64) (*virtualdevices.Weather, bool) {
-	return nil, false
-}

@@ -28,10 +28,12 @@ import (
 	"github.com/SmartPotTech/SmartPot-API-Go/internal/notifications"
 	"github.com/SmartPotTech/SmartPot-API-Go/internal/overview"
 	"github.com/SmartPotTech/SmartPot-API-Go/internal/platform/events"
+	"github.com/SmartPotTech/SmartPot-API-Go/internal/platform/geo"
 	"github.com/SmartPotTech/SmartPot-API-Go/internal/platform/logging"
 	"github.com/SmartPotTech/SmartPot-API-Go/internal/readings"
 	"github.com/SmartPotTech/SmartPot-API-Go/internal/security"
 	"github.com/SmartPotTech/SmartPot-API-Go/internal/users"
+	"github.com/SmartPotTech/SmartPot-API-Go/internal/virtualdevices"
 )
 
 func main() {
@@ -86,8 +88,10 @@ func run() error {
 	readingRepo := readings.NewRepository(db)
 	actuatorRepo := actuators.NewRepository(db)
 	commandRepo := commands.NewRepository(db)
+	vdRepo := virtualdevices.NewRepository(db)
 	ensureIndexes(logger, userRepo.EnsureIndexes, tokenRepo.EnsureIndexes, notificationRepo.EnsureIndexes,
-		cropRepo.EnsureIndexes, readingRepo.EnsureIndexes, actuatorRepo.EnsureIndexes, commandRepo.EnsureIndexes)
+		cropRepo.EnsureIndexes, readingRepo.EnsureIndexes, actuatorRepo.EnsureIndexes, commandRepo.EnsureIndexes,
+		vdRepo.EnsureIndexes)
 
 	// Servicios.
 	notificationService := notifications.NewService(notificationRepo, cacheStore, bus, clock)
@@ -98,11 +102,13 @@ func run() error {
 		notificationService, bus, clock)
 	readingService := readings.NewService(readingRepo, cropService, cacheStore, bus, clock,
 		cfg.Readings.MinInterval, cfg.Readings.MaxPageSize)
-	weatherService := crops.NewWeatherService(noopWeatherSource{}, cacheStore)
+	simulatorClient := virtualdevices.NewSimulatorClient(cfg.Simulator)
+	weatherService := crops.NewWeatherService(simulatorClient, cacheStore)
 	actuatorService := actuators.NewService(actuatorRepo, cropService, clock)
 	cropService.SetActuatorSeeder(actuatorService)
 	commandService := commands.NewService(commandRepo, cropService, actuatorService, notificationService, clock,
 		cfg.MQTT.CommandTimeout)
+	virtualDeviceService := virtualdevices.NewService(vdRepo, virtualCropsAdapter{crops: cropService}, simulatorClient, clock)
 
 	// MQTT: gateway, aprovisionamiento en el broker y enrutado de mensajes.
 	gateway := mqtt.NewGateway(cfg.MQTT, topics, logger)
@@ -155,6 +161,9 @@ func run() error {
 			logger.Warn("no se pudieron borrar las notificaciones del cultivo", "cropId", e.CropID, "err", err)
 		}
 	})
+	events.Subscribe(bus, func(e crops.DeletedEvent) { go virtualDeviceService.OnCropDeleted(e.CropID) })
+	events.Subscribe(bus, func(e crops.PlacementChangedEvent) { go virtualDeviceService.OnPlacementChanged(e.CropID) })
+	events.Subscribe(bus, func(e crops.DeviceKeyRotatedEvent) { go virtualDeviceService.OnKeyRotated(e.CropID) })
 
 	// Servidor HTTP.
 	rateLimiter := security.NewRateLimiter(cacheStore, cfg.Security.RateLimitPerMinute, cfg.Security.AuthRateLimitPerMinute)
@@ -167,10 +176,10 @@ func run() error {
 			defer cancel()
 			return mongoClient.Ping(ctx) == nil
 		},
-		Cache:  cacheStore.RedisAvailable,
-		Broker: func() (bool, bool) { return gateway.IsEnabled(), gateway.IsConnected() },
-		AI:     func() (bool, bool) { return aiClient.IsEnabled(), aiClient.IsHealthy() },
-		// El simulador se cablea en su fase.
+		Cache:     cacheStore.RedisAvailable,
+		Broker:    func() (bool, bool) { return gateway.IsEnabled(), gateway.IsConnected() },
+		AI:        func() (bool, bool) { return aiClient.IsEnabled(), aiClient.IsHealthy() },
+		Simulator: func() (bool, bool) { return simulatorClient.IsAvailable(), simulatorClient.IsHealthy() },
 	}
 	engine.GET("/health", checker.Handler())
 
@@ -184,12 +193,16 @@ func run() error {
 	authed.Use(tokenService.Guard())
 	users.NewHandler(userService).Register(authed)
 	notifications.NewHandler(notificationService).Register(authed)
-	crops.NewHandler(cropService, readingService, noopVirtualManager{}, weatherService).Register(authed)
+	crops.NewHandler(cropService, readingService, virtualDeviceService, weatherService).Register(authed)
 	readings.NewHandler(readingService).Register(authed)
 	actuators.NewHandler(actuatorService, clock).Register(authed)
 	commands.NewHandler(commandService).Register(authed)
 	aiHandler.RegisterAuthed(authed)
 	overview.NewHandler(overviewService).Register(authed)
+	virtualdevices.NewHandler(virtualDeviceService).Register(authed)
+
+	// Completa el tipo, la forma y el lugar de los cultivos anteriores (idempotente).
+	runCropBackfill(logger, vdRepo, cropService)
 
 	// Trabajos en segundo plano (sin cron en el servidor).
 	jobsCtx, stopJobs := context.WithCancel(context.Background())
@@ -197,6 +210,7 @@ func run() error {
 	go tick(jobsCtx, time.Minute, cacheStore.PurgeExpired)
 	go tick(jobsCtx, 30*time.Second, func() { commandService.ExpireStale(context.Background()) })
 	go tick(jobsCtx, cfg.AI.LearningFlush, func() { learningFeed.Flush(context.Background()) })
+	go tick(jobsCtx, cfg.Simulator.ReconcileInterval, func() { virtualDeviceService.Reconcile(context.Background()) })
 
 	srv := &http.Server{
 		Addr:              fmt.Sprintf(":%d", cfg.Server.Port),
@@ -237,6 +251,38 @@ func run() error {
 	}
 	logger.Info("apagado completo")
 	return nil
+}
+
+// runCropBackfill completa el tipo, la forma y el lugar de los cultivos
+// anteriores a esos campos, usando las simulaciones para saber cuáles eran virtuales.
+func runCropBackfill(logger *slog.Logger, vdRepo *virtualdevices.Repository, cropService *crops.Service) {
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+	vds, err := vdRepo.FindAll(ctx)
+	if err != nil {
+		logger.Warn("no se pudo completar el tipo de los cultivos anteriores", "err", err)
+		return
+	}
+	virtualCropIDs := make([]string, 0, len(vds))
+	var placements []crops.PlacementBackfill
+	for i := range vds {
+		vd := &vds[i]
+		cropID := vd.CropID.Hex()
+		virtualCropIDs = append(virtualCropIDs, cropID)
+		if vd.Location == nil {
+			continue
+		}
+		placement := geo.Placement{Location: &geo.Location{Name: vd.Location.Name, Latitude: vd.Location.Latitude, Longitude: vd.Location.Longitude}}
+		if vd.Mode == virtualdevices.ModeWeather {
+			setting, exposure := geo.Outdoor, geo.FullSun
+			placement.Setting = &setting
+			placement.Exposure = &exposure
+		}
+		placements = append(placements, crops.PlacementBackfill{CropID: cropID, Placement: placement})
+	}
+	if err := cropService.Backfill(ctx, virtualCropIDs, placements); err != nil {
+		logger.Warn("no se pudo completar el tipo de los cultivos anteriores", "err", err)
+	}
 }
 
 // tick ejecuta fn cada intervalo hasta que se cancela el contexto. Reemplaza a
