@@ -17,6 +17,8 @@ import (
 	"github.com/SmartPotTech/SmartPot-API-Go/internal/ai"
 	"github.com/SmartPotTech/SmartPot-API-Go/internal/auth"
 	"github.com/SmartPotTech/SmartPot-API-Go/internal/cache"
+	"github.com/SmartPotTech/SmartPot-API-Go/internal/channels"
+	"github.com/SmartPotTech/SmartPot-API-Go/internal/channels/telegram"
 	"github.com/SmartPotTech/SmartPot-API-Go/internal/commands"
 	"github.com/SmartPotTech/SmartPot-API-Go/internal/config"
 	"github.com/SmartPotTech/SmartPot-API-Go/internal/crops"
@@ -89,9 +91,11 @@ func run() error {
 	actuatorRepo := actuators.NewRepository(db)
 	commandRepo := commands.NewRepository(db)
 	vdRepo := virtualdevices.NewRepository(db)
+	channelLinkRepo := channels.NewLinkRepository(db)
+	cropChannelRepo := channels.NewCropRepository(db)
 	ensureIndexes(logger, userRepo.EnsureIndexes, tokenRepo.EnsureIndexes, notificationRepo.EnsureIndexes,
 		cropRepo.EnsureIndexes, readingRepo.EnsureIndexes, actuatorRepo.EnsureIndexes, commandRepo.EnsureIndexes,
-		vdRepo.EnsureIndexes)
+		vdRepo.EnsureIndexes, channelLinkRepo.EnsureIndexes, cropChannelRepo.EnsureIndexes)
 
 	// Servicios.
 	notificationService := notifications.NewService(notificationRepo, cacheStore, bus, clock)
@@ -165,6 +169,23 @@ func run() error {
 	events.Subscribe(bus, func(e crops.PlacementChangedEvent) { go virtualDeviceService.OnPlacementChanged(e.CropID) })
 	events.Subscribe(bus, func(e crops.DeviceKeyRotatedEvent) { go virtualDeviceService.OnKeyRotated(e.CropID) })
 
+	// Canales externos (Telegram): vínculos de cuenta, avisos por cultivo y resúmenes.
+	telegramClient := telegram.NewClient(cfg.Telegram)
+	telegramChannel := telegram.NewChannel(cfg.Telegram, telegramClient)
+	channelService := channels.NewService(channelLinkRepo, []channels.NotificationChannel{telegramChannel}, cacheStore, clock)
+	cropChannelService := channels.NewCropChannelService(cropChannelRepo, channelService, cropService, cacheStore, clock)
+	channelSender := channels.NewSender(channelService, cropChannelService)
+	dispatcher := channels.NewDispatcher(channelService, cropChannelService, channelSender, cfg.Server.WebBaseURL)
+	digest := channels.NewDigest(cropChannelRepo, channelService, channelSender, cropService, notificationRepo,
+		readingService, commandService, clock, timezone, cfg.Server.WebBaseURL)
+	telegramBot := telegram.NewBot(channelService, cropChannelService, cropService, telegramClient)
+	telegramListener := telegram.NewListener(cfg.Telegram, telegramClient, telegramBot)
+	telegramWebhook := telegram.NewWebhookController(cfg.Telegram, telegramListener)
+	userService.AddAccountDeleter(channelService.DeleteAllForUser)
+	userService.AddAccountDeleter(cropChannelService.DeleteAllForOwner)
+	events.Subscribe(bus, func(e notifications.CreatedEvent) { go dispatcher.OnNotification(e) })
+	events.Subscribe(bus, func(e crops.DeletedEvent) { go cropChannelService.OnCropDeleted(e.CropID) })
+
 	// Servidor HTTP.
 	rateLimiter := security.NewRateLimiter(cacheStore, cfg.Security.RateLimitPerMinute, cfg.Security.AuthRateLimitPerMinute)
 	engine := httpserver.New(logger)
@@ -188,6 +209,7 @@ func run() error {
 	auth.NewHandler(authService).Register(v1)
 	aiHandler := ai.NewHandler(insightService, aiClient)
 	aiHandler.RegisterPublic(v1)
+	telegramWebhook.Register(v1)
 
 	authed := v1.Group("")
 	authed.Use(tokenService.Guard())
@@ -200,6 +222,7 @@ func run() error {
 	aiHandler.RegisterAuthed(authed)
 	overview.NewHandler(overviewService).Register(authed)
 	virtualdevices.NewHandler(virtualDeviceService).Register(authed)
+	channels.NewHandler(channelService, cropChannelService).Register(authed)
 
 	// Completa el tipo, la forma y el lugar de los cultivos anteriores (idempotente).
 	runCropBackfill(logger, vdRepo, cropService)
@@ -211,6 +234,10 @@ func run() error {
 	go tick(jobsCtx, 30*time.Second, func() { commandService.ExpireStale(context.Background()) })
 	go tick(jobsCtx, cfg.AI.LearningFlush, func() { learningFeed.Flush(context.Background()) })
 	go tick(jobsCtx, cfg.Simulator.ReconcileInterval, func() { virtualDeviceService.Reconcile(context.Background()) })
+	go tick(jobsCtx, cfg.Channels.DigestInterval, func() { digest.Run(context.Background()) })
+
+	// Recepción de mensajes del bot de Telegram (sondeo largo o webhook).
+	telegramListener.Start()
 
 	srv := &http.Server{
 		Addr:              fmt.Sprintf(":%d", cfg.Server.Port),
@@ -242,6 +269,7 @@ func run() error {
 		logger.Error("apagado del servidor con error", "err", err)
 	}
 	stopJobs()
+	telegramListener.Stop()
 	gateway.Close()
 	if err := cacheStore.Close(); err != nil {
 		logger.Error("cierre de Redis con error", "err", err)
