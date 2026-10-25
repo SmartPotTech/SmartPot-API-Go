@@ -40,6 +40,11 @@ import (
 )
 
 func main() {
+	// Subcomando para el HEALTHCHECK de Docker (lo usa el propio binario; la
+	// imagen de ejecución no trae wget ni curl).
+	if len(os.Args) > 1 && os.Args[1] == "healthcheck" {
+		os.Exit(healthcheck())
+	}
 	if err := run(); err != nil {
 		fmt.Fprintln(os.Stderr, "error fatal al arrancar:", err)
 		os.Exit(1)
