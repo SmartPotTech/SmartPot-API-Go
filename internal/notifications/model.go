@@ -3,6 +3,8 @@
 package notifications
 
 import (
+	"encoding/json"
+	"fmt"
 	"time"
 
 	"go.mongodb.org/mongo-driver/bson/primitive"
@@ -18,6 +20,36 @@ const (
 	TypeDevice  Type = "DEVICE"
 	TypeAI      Type = "AI"
 )
+
+// OrderedTypes son los tipos en el orden del enum de Java (por ordinal). Es el
+// orden con el que las respuestas que exponen conjuntos (TreeSet/EnumSet) los
+// serializan, así que hay que conservarlo para la transparencia.
+var OrderedTypes = []Type{TypeInfo, TypeAlert, TypeCommand, TypeDevice, TypeAI}
+
+// Ordinal devuelve la posición del tipo en el enum (para ordenar como en Java).
+func Ordinal(t Type) int {
+	for i, x := range OrderedTypes {
+		if x == t {
+			return i
+		}
+	}
+	return len(OrderedTypes)
+}
+
+// UnmarshalJSON rechaza un tipo de notificación desconocido (mismo 400 que Jackson).
+func (t *Type) UnmarshalJSON(b []byte) error {
+	var s string
+	if err := json.Unmarshal(b, &s); err != nil {
+		return err
+	}
+	switch Type(s) {
+	case TypeInfo, TypeAlert, TypeCommand, TypeDevice, TypeAI:
+		*t = Type(s)
+		return nil
+	default:
+		return fmt.Errorf("tipo de notificación inválido: %q", s)
+	}
+}
 
 // Notification es el documento de la colección "notifications". cropId es
 // opcional (las notificaciones de cuenta no tienen cultivo).
