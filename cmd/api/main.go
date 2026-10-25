@@ -14,6 +14,7 @@ import (
 	"time"
 
 	"github.com/SmartPotTech/SmartPot-API-Go/internal/actuators"
+	"github.com/SmartPotTech/SmartPot-API-Go/internal/ai"
 	"github.com/SmartPotTech/SmartPot-API-Go/internal/auth"
 	"github.com/SmartPotTech/SmartPot-API-Go/internal/cache"
 	"github.com/SmartPotTech/SmartPot-API-Go/internal/commands"
@@ -112,6 +113,22 @@ func run() error {
 	commandService.SetPublisher(gateway)
 	gateway.Start()
 
+	// Asistente de IA: evaluación, agente de automatización y aprendizaje continuo.
+	timezone, err := time.LoadLocation(cfg.AI.Timezone)
+	if err != nil {
+		logger.Warn("zona horaria de la IA inválida; se usa UTC", "timezone", cfg.AI.Timezone, "err", err)
+		timezone = time.UTC
+	}
+	aiClient := ai.NewClient(cfg.AI, cacheStore, clock)
+	insightService := ai.NewInsightService(aiClient, cropService, readingService, actuatorService, weatherService,
+		clock, cfg.AI.HistorySize, timezone)
+	agent := ai.NewAutomationAgent(insightService, commandService, notificationService, cacheStore, aiClient,
+		cropService, cfg.AI.EvaluationInterval, cfg.AI.AutomationCooldown)
+	learningFeed := ai.NewLearningFeed(aiClient, cropService, cfg.AI.LearningEnabled, timezone)
+	events.Subscribe(bus, func(e readings.ReadingRecordedEvent) { go agent.OnReading(e) })
+	events.Subscribe(bus, func(e readings.ReadingRecordedEvent) { learningFeed.OnReading(e) })
+	events.Subscribe(bus, func(e crops.DeletedEvent) { go learningFeed.OnCropDeleted(e) })
+
 	userService := users.NewService(userRepo, clock)
 	userService.AddAccountDeleter(notificationService.DeleteAllForUser)
 	userService.AddAccountDeleter(tokenRepo.DeleteByUserID)
@@ -149,13 +166,16 @@ func run() error {
 		},
 		Cache:  cacheStore.RedisAvailable,
 		Broker: func() (bool, bool) { return gateway.IsEnabled(), gateway.IsConnected() },
-		// IA y simulador se cablean en sus fases.
+		AI:     func() (bool, bool) { return aiClient.IsEnabled(), aiClient.IsHealthy() },
+		// El simulador se cablea en su fase.
 	}
 	engine.GET("/health", checker.Handler())
 
 	// Rutas públicas y autenticadas bajo /api/v1.
 	v1 := engine.Group("/api/v1")
 	auth.NewHandler(authService).Register(v1)
+	aiHandler := ai.NewHandler(insightService, aiClient)
+	aiHandler.RegisterPublic(v1)
 
 	authed := v1.Group("")
 	authed.Use(tokenService.Guard())
@@ -165,12 +185,14 @@ func run() error {
 	readings.NewHandler(readingService).Register(authed)
 	actuators.NewHandler(actuatorService, clock).Register(authed)
 	commands.NewHandler(commandService).Register(authed)
+	aiHandler.RegisterAuthed(authed)
 
 	// Trabajos en segundo plano (sin cron en el servidor).
 	jobsCtx, stopJobs := context.WithCancel(context.Background())
 	defer stopJobs()
 	go tick(jobsCtx, time.Minute, cacheStore.PurgeExpired)
 	go tick(jobsCtx, 30*time.Second, func() { commandService.ExpireStale(context.Background()) })
+	go tick(jobsCtx, cfg.AI.LearningFlush, func() { learningFeed.Flush(context.Background()) })
 
 	srv := &http.Server{
 		Addr:              fmt.Sprintf(":%d", cfg.Server.Port),
