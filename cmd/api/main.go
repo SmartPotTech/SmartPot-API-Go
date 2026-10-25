@@ -28,6 +28,7 @@ import (
 	"github.com/SmartPotTech/SmartPot-API-Go/internal/mongodb"
 	"github.com/SmartPotTech/SmartPot-API-Go/internal/mqtt"
 	"github.com/SmartPotTech/SmartPot-API-Go/internal/notifications"
+	"github.com/SmartPotTech/SmartPot-API-Go/internal/openapi"
 	"github.com/SmartPotTech/SmartPot-API-Go/internal/overview"
 	"github.com/SmartPotTech/SmartPot-API-Go/internal/platform/events"
 	"github.com/SmartPotTech/SmartPot-API-Go/internal/platform/geo"
@@ -203,6 +204,9 @@ func run() error {
 		Simulator: func() (bool, bool) { return simulatorClient.IsAvailable(), simulatorClient.IsHealthy() },
 	}
 	engine.GET("/health", checker.Handler())
+
+	// Documentación OpenAPI en /v3/api-docs y la interfaz de Swagger en /docs.
+	openapi.Register(engine, cfg.Server.PublicAPIURL, cfg.Server.DocsEnabled)
 
 	// Rutas públicas y autenticadas bajo /api/v1.
 	v1 := engine.Group("/api/v1")
