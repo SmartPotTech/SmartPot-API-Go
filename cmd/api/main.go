@@ -26,6 +26,7 @@ import (
 	"github.com/SmartPotTech/SmartPot-API-Go/internal/mongodb"
 	"github.com/SmartPotTech/SmartPot-API-Go/internal/mqtt"
 	"github.com/SmartPotTech/SmartPot-API-Go/internal/notifications"
+	"github.com/SmartPotTech/SmartPot-API-Go/internal/overview"
 	"github.com/SmartPotTech/SmartPot-API-Go/internal/platform/events"
 	"github.com/SmartPotTech/SmartPot-API-Go/internal/platform/logging"
 	"github.com/SmartPotTech/SmartPot-API-Go/internal/readings"
@@ -125,6 +126,8 @@ func run() error {
 	agent := ai.NewAutomationAgent(insightService, commandService, notificationService, cacheStore, aiClient,
 		cropService, cfg.AI.EvaluationInterval, cfg.AI.AutomationCooldown)
 	learningFeed := ai.NewLearningFeed(aiClient, cropService, cfg.AI.LearningEnabled, timezone)
+	overviewService := overview.NewService(cropService, readingService, actuatorService, commandService,
+		notificationService, aiClient, clock, timezone)
 	events.Subscribe(bus, func(e readings.ReadingRecordedEvent) { go agent.OnReading(e) })
 	events.Subscribe(bus, func(e readings.ReadingRecordedEvent) { learningFeed.OnReading(e) })
 	events.Subscribe(bus, func(e crops.DeletedEvent) { go learningFeed.OnCropDeleted(e) })
@@ -186,6 +189,7 @@ func run() error {
 	actuators.NewHandler(actuatorService, clock).Register(authed)
 	commands.NewHandler(commandService).Register(authed)
 	aiHandler.RegisterAuthed(authed)
+	overview.NewHandler(overviewService).Register(authed)
 
 	// Trabajos en segundo plano (sin cron en el servidor).
 	jobsCtx, stopJobs := context.WithCancel(context.Background())
