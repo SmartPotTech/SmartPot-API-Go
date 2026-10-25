@@ -5,6 +5,7 @@ package actuators
 import (
 	"encoding/json"
 	"fmt"
+	"strings"
 	"time"
 
 	"github.com/SmartPotTech/SmartPot-API-Go/internal/platform/validation"
@@ -69,6 +70,14 @@ func (t *Type) UnmarshalJSON(b []byte) error {
 	}
 	*t = Type(s)
 	return nil
+}
+
+// ParseType interpreta un tipo de actuador sin distinguir mayúsculas; el
+// segundo valor indica si es válido.
+func ParseType(value string) (Type, bool) {
+	t := Type(strings.ToUpper(strings.TrimSpace(value)))
+	_, ok := typeMeta[t]
+	return t, ok
 }
 
 // Actuator es el documento de la colección "actuators".

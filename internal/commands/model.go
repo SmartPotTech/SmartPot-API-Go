@@ -6,6 +6,7 @@ package commands
 import (
 	"encoding/json"
 	"fmt"
+	"strings"
 	"time"
 
 	"github.com/SmartPotTech/SmartPot-API-Go/internal/actuators"
@@ -33,6 +34,18 @@ func (a *Action) UnmarshalJSON(b []byte) error {
 		return nil
 	default:
 		return fmt.Errorf("acción inválida: %q", s)
+	}
+}
+
+// ParseAction interpreta una acción sin distinguir mayúsculas; el segundo valor
+// indica si es válida.
+func ParseAction(value string) (Action, bool) {
+	a := Action(strings.ToUpper(strings.TrimSpace(value)))
+	switch a {
+	case Activate, Deactivate:
+		return a, true
+	default:
+		return "", false
 	}
 }
 
