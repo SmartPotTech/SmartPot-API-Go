@@ -15,10 +15,12 @@ broker y consulta al **asistente de IA** para diagnosticar cada cultivo y, si el
 cuenta.
 
 Es una migración **transparente** de la versión en Spring Boot: reproduce idénticos todos los contratos externos —rutas
-REST, formas JSON, códigos y mensajes en español, tópicos MQTT y aprovisionamiento en Mosquitto, claves de Redis, SMTP y
+REST, formas JSON, códigos y mensajes en español, tópicos MQTT y aprovisionamiento en Mosquitto, claves de la caché, SMTP y
 las llamadas HTTP a la IA, al simulador y a Telegram—, de modo que la web, el broker, los dispositivos, la IA y el
 simulador siguen funcionando **sin cambios**. La base de datos es un detalle interno detrás de un puerto: la API es el
 centro de control y el motor (hoy **PostgreSQL + TimescaleDB**, antes MongoDB) se puede cambiar sin tocar el dominio.
+La caché sigue el mismo patrón: detrás del puerto `Cache` hay un adaptador (hoy **Valkey**, el reemplazo libre de
+Redis) que se puede cambiar sin tocar los servicios.
 Los tokens JWT y las claves de dispositivo ya
 emitidos siguen siendo válidos (mismo secreto HS256, BCrypt de costo 12 y AES-256-GCM). Por dentro aprovecha las
 goroutines: el cliente MQTT, el bot de Telegram, los trabajos periódicos y el bus de eventos corren en paralelo sin
@@ -30,7 +32,7 @@ flowchart LR
   esp["Cultivo real<br/>ESP32 o Wokwi"] -->|"MQTT"| broker["SmartPot-Broker"]
   broker <-->|"telemetría · comandos · ACK"| api
   api --> db[("PostgreSQL<br/>+ TimescaleDB")]
-  api --> cache[("Redis")]
+  api --> cache[("Valkey")]
   api --> mail["Mailpit / SMTP"]
   api -->|"evaluación · lecturas para aprender"| ai["SmartPot-AI"]
   api -->|"cultivos virtuales y clima"| sim["SmartPot-DataGenerator"]
@@ -49,7 +51,10 @@ El código vive en `internal/`, un paquete por dominio (los mismos de la versió
 equivalencia). Cada dominio reúne `handler.go`, `service.go`, `model.go`, `dto.go` y `port.go` —la interfaz
 `Repository` que el servicio necesita de la capa de datos—; las implementaciones de esos puertos sobre PostgreSQL
 viven aparte, en `internal/storage/postgres`. Así el dominio no conoce el motor de base de datos (inversión de
-dependencias / puertos y adaptadores). `cmd/api` es el punto de entrada que cablea todo y arranca el servidor.
+dependencias / puertos y adaptadores). La caché aplica el mismo patrón: los servicios dependen del puerto `cache.Cache`
+y el acceso al sistema remoto está detrás del puerto de salida `cache.Backend`, cuyo adaptador vive en
+`internal/cache/valkey`; cambiar de sistema de caché es solo otro adaptador. `cmd/api` es el punto de entrada que
+cablea todo y arranca el servidor.
 
 ```text
 cmd/api/                 # Punto de entrada: carga la config, cablea los componentes y arranca
@@ -57,7 +62,8 @@ internal/
 ├── config/              # Carga del entorno y parser de duraciones ISO-8601 (PT5M, P7D)
 ├── httpserver/          # Motor Gin, middleware, handler central de errores y router
 ├── security/            # JWT HS256, BCrypt, AES-GCM, CORS, límite de peticiones y guardas
-├── cache/               # Contadores y enfriamientos en Redis con respaldo en memoria
+├── cache/               # Puerto Cache + Backend y almacén resiliente con respaldo en memoria (contadores y enfriamientos)
+├── cache/valkey/        # Adaptador del puerto Backend sobre Valkey (reemplazo libre de Redis) vía go-redis
 ├── storage/postgres/    # Adaptadores de los puertos Repository sobre PostgreSQL + TimescaleDB (pool y SQL)
 ├── mqtt/                # Cliente Paho, tópicos v1, parser de telemetría y aprovisionamiento en Mosquitto
 ├── mail/                # Correos de bienvenida y de recuperación de contraseña
@@ -170,7 +176,7 @@ responde, el lote espera al siguiente ciclo (la cola guarda hasta 20 000 lectura
 (`/api/v1/overview`) mira la cuenta completa: las series comparativas se agregan en la hipertabla con `time_bucket` y el
 análisis de flota pide a la IA el ranking, los problemas compartidos y las acciones en bloque. La evaluación también
 lleva el **lugar** del cultivo y el **clima de afuera**, que el simulador consulta y la API guarda 10 minutos por lugar
-en Redis.
+en la caché.
 
 ## Notificaciones por Telegram
 
@@ -206,7 +212,8 @@ completa el tipo y la forma de los cultivos anteriores.
 ### Requisitos Previos
 
 - Go 1.26 (o solo Docker)
-- PostgreSQL + TimescaleDB ([SmartPot-DB-Postgre](https://github.com/SmartPotTech/SmartPot-DB-Postgre)), Redis,
+- PostgreSQL + TimescaleDB ([SmartPot-DB-Postgre](https://github.com/SmartPotTech/SmartPot-DB-Postgre)),
+  Valkey ([SmartPot-Cache-Valkey](https://github.com/SmartPotTech/SmartPot-Cache-Valkey)),
   Mailpit, el broker y el servicio de IA: el entorno completo está
   en [SmartPotTech/.github](https://github.com/SmartPotTech/.github)
 
