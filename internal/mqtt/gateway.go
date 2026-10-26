@@ -23,7 +23,6 @@ type Gateway struct {
 	client    paho.Client
 	topics    *TopicResolver
 	router    func(topic, payload string)
-	onConnect func(reconnect bool)
 	log       *slog.Logger
 	connected atomic.Bool
 }
@@ -62,9 +61,6 @@ func NewGateway(cfg config.MQTT, topics *TopicResolver, logger *slog.Logger) *Ga
 
 // SetRouter fija el enrutador de mensajes entrantes.
 func (g *Gateway) SetRouter(router func(topic, payload string)) { g.router = router }
-
-// SetOnConnect fija el callback que corre al (re)conectar.
-func (g *Gateway) SetOnConnect(fn func(reconnect bool)) { g.onConnect = fn }
 
 // Start conecta al broker (con reintentos en segundo plano).
 func (g *Gateway) Start() {
@@ -112,7 +108,7 @@ func (g *Gateway) PublishCommand(cropID, payload string) bool {
 }
 
 func (g *Gateway) onConnected(c paho.Client) {
-	subscriptions := map[string]byte{ControlResponseTopic: 1}
+	subscriptions := make(map[string]byte)
 	for _, topic := range g.topics.Subscriptions() {
 		subscriptions[topic] = 1
 	}
@@ -122,9 +118,6 @@ func (g *Gateway) onConnected(c paho.Client) {
 	}
 	reconnect := g.connected.Swap(true)
 	g.log.Info("conectado al broker MQTT", "reconexion", reconnect)
-	if g.onConnect != nil {
-		go g.onConnect(reconnect)
-	}
 }
 
 func (g *Gateway) onMessage(_ paho.Client, m paho.Message) {

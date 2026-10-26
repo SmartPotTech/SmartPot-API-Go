@@ -1,17 +1,12 @@
-// Package mqtt implementa el cliente del broker, el contrato de tópicos v1 y el
-// aprovisionamiento de dispositivos en Mosquitto (dynamic security).
+// Package mqtt implementa el cliente del broker, el contrato de tópicos v1, la
+// autenticación de dispositivos (que el broker EMQX delega en la API) y el corte
+// de sesiones al rotar o borrar la clave de un cultivo.
 package mqtt
 
 import (
 	"strings"
 
 	"github.com/SmartPotTech/SmartPot-API-Go/internal/platform/objectid"
-)
-
-// Tópicos de control de la seguridad dinámica de Mosquitto.
-const (
-	ControlTopic         = "$CONTROL/dynamic-security/v1"
-	ControlResponseTopic = ControlTopic + "/response"
 )
 
 // Kind es el tipo de mensaje de un tópico del dispositivo.
@@ -52,22 +47,6 @@ func (r *TopicResolver) Status(cropID string) string { return r.prefix + "/" + c
 // Subscriptions son los tópicos que la API escucha de todos los cultivos.
 func (r *TopicResolver) Subscriptions() []string {
 	return []string{r.Telemetry("+"), r.CommandAck("+"), r.Status("+")}
-}
-
-// DevicePublishPatterns son los patrones de publicación del rol de dispositivo
-// (%u es el usuario MQTT, que es el id del cultivo).
-func (r *TopicResolver) DevicePublishPatterns() []string {
-	return []string{r.Telemetry("%u"), r.CommandAck("%u"), r.Status("%u")}
-}
-
-// DeviceSubscribePattern es el patrón de suscripción del rol de dispositivo.
-func (r *TopicResolver) DeviceSubscribePattern() string {
-	return r.Commands("%u")
-}
-
-// ServiceScope es el alcance de la cuenta administradora.
-func (r *TopicResolver) ServiceScope() string {
-	return r.prefix + "/#"
 }
 
 // Parse interpreta un tópico entrante; devuelve false si no es un tópico v1 válido.

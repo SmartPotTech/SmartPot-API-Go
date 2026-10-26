@@ -13,19 +13,18 @@ import (
 // MessageHandler enruta cada mensaje del broker según su tópico. Un mensaje
 // inválido se registra y se descarta: nunca debe tumbar la suscripción.
 type MessageHandler struct {
-	topics      *TopicResolver
-	readings    *readings.Service
-	commands    *commands.Service
-	crops       *crops.Service
-	provisioner *Provisioner
-	log         *slog.Logger
+	topics   *TopicResolver
+	readings *readings.Service
+	commands *commands.Service
+	crops    *crops.Service
+	log      *slog.Logger
 }
 
 // NewMessageHandler crea el enrutador de mensajes.
 func NewMessageHandler(topics *TopicResolver, readingsSvc *readings.Service, commandsSvc *commands.Service,
-	cropsSvc *crops.Service, provisioner *Provisioner, logger *slog.Logger) *MessageHandler {
+	cropsSvc *crops.Service, logger *slog.Logger) *MessageHandler {
 	return &MessageHandler{topics: topics, readings: readingsSvc, commands: commandsSvc, crops: cropsSvc,
-		provisioner: provisioner, log: logger}
+		log: logger}
 }
 
 // Route procesa un mensaje entrante. Corre en una goroutine por mensaje.
@@ -36,10 +35,6 @@ func (h *MessageHandler) Route(topic, payload string) {
 		}
 	}()
 
-	if topic == ControlResponseTopic {
-		h.provisioner.OnControlResponse(payload)
-		return
-	}
 	parsed, ok := h.topics.Parse(topic)
 	if !ok {
 		h.log.Debug("tópico ignorado", "topic", topic)
