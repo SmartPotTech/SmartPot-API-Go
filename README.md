@@ -11,13 +11,15 @@
 SmartPot-API-Go es el núcleo de **SmartPot** reescrito en **Go 1.26** con **Gin**: una API REST y MQTT que conecta los
 cultivos hidropónicos, reales o virtuales, con la aplicación web. Recibe la telemetría por **MQTT**, la guarda en
 **PostgreSQL + TimescaleDB**, envía comandos a los actuadores, administra las credenciales de cada dispositivo en el
-broker y consulta al **asistente de IA** para diagnosticar cada cultivo y, si el usuario lo permite, actuar por su cuenta.
+broker y consulta al **asistente de IA** para diagnosticar cada cultivo y, si el usuario lo permite, actuar por su
+cuenta.
 
 Es una migración **transparente** de la versión en Spring Boot: reproduce idénticos todos los contratos externos —rutas
 REST, formas JSON, códigos y mensajes en español, tópicos MQTT y aprovisionamiento en Mosquitto, claves de Redis, SMTP y
 las llamadas HTTP a la IA, al simulador y a Telegram—, de modo que la web, el broker, los dispositivos, la IA y el
 simulador siguen funcionando **sin cambios**. La base de datos es un detalle interno detrás de un puerto: la API es el
-centro de control y el motor (hoy **PostgreSQL + TimescaleDB**, antes MongoDB) se puede cambiar sin tocar el dominio. Los tokens JWT y las claves de dispositivo ya
+centro de control y el motor (hoy **PostgreSQL + TimescaleDB**, antes MongoDB) se puede cambiar sin tocar el dominio.
+Los tokens JWT y las claves de dispositivo ya
 emitidos siguen siendo válidos (mismo secreto HS256, BCrypt de costo 12 y AES-256-GCM). Por dentro aprovecha las
 goroutines: el cliente MQTT, el bot de Telegram, los trabajos periódicos y el bus de eventos corren en paralelo sin
 hilos ni cron en el servidor.
@@ -241,9 +243,12 @@ docker pull ghcr.io/smartpottech/smartpot-api-go:latest
 
 La imagen compila el binario estático en una etapa aparte y lo copia a una imagen final `scratch`: sin shell, sin gestor
 de paquetes y sin herramientas de red, así un contenedor comprometido no encuentra nada que aprovechar. Corre como el
-usuario `1000`, admite sistema de archivos de solo lectura (no escribe en disco) y el `HEALTHCHECK` lo resuelve el propio
-binario (`smartpot-api healthcheck`), sin `wget` ni `curl`. La zona horaria va incrustada en el binario y solo se suma el
-bundle de certificados CA para las conexiones TLS. Cada cambio en `main` pasa por el CI y publica la imagen en GHCR (y en
+usuario `1000`, admite sistema de archivos de solo lectura (no escribe en disco) y el `HEALTHCHECK` lo resuelve el
+propio
+binario (`smartpot-api healthcheck`), sin `wget` ni `curl`. La zona horaria va incrustada en el binario y solo se suma
+el
+bundle de certificados CA para las conexiones TLS. Cada cambio en `main` pasa por el CI y publica la imagen en GHCR (y
+en
 Docker Hub como réplica cuando el repositorio tiene credenciales).
 
 ## Documentación
