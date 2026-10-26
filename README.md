@@ -10,13 +10,14 @@
 
 SmartPot-API-Go es el núcleo de **SmartPot** reescrito en **Go 1.26** con **Gin**: una API REST y MQTT que conecta los
 cultivos hidropónicos, reales o virtuales, con la aplicación web. Recibe la telemetría por **MQTT**, la guarda en
-**MongoDB**, envía comandos a los actuadores, administra las credenciales de cada dispositivo en el broker y consulta al
-**asistente de IA** para diagnosticar cada cultivo y, si el usuario lo permite, actuar por su cuenta.
+**PostgreSQL + TimescaleDB**, envía comandos a los actuadores, administra las credenciales de cada dispositivo en el
+broker y consulta al **asistente de IA** para diagnosticar cada cultivo y, si el usuario lo permite, actuar por su cuenta.
 
 Es una migración **transparente** de la versión en Spring Boot: reproduce idénticos todos los contratos externos —rutas
-REST, formas JSON, códigos y mensajes en español, tópicos MQTT y aprovisionamiento en Mosquitto, colecciones de MongoDB,
-claves de Redis, SMTP y las llamadas HTTP a la IA, al simulador y a Telegram—, de modo que la web, el broker, los
-dispositivos, la IA y el simulador siguen funcionando **sin cambios**. Los tokens JWT y las claves de dispositivo ya
+REST, formas JSON, códigos y mensajes en español, tópicos MQTT y aprovisionamiento en Mosquitto, claves de Redis, SMTP y
+las llamadas HTTP a la IA, al simulador y a Telegram—, de modo que la web, el broker, los dispositivos, la IA y el
+simulador siguen funcionando **sin cambios**. La base de datos es un detalle interno detrás de un puerto: la API es el
+centro de control y el motor (hoy **PostgreSQL + TimescaleDB**, antes MongoDB) se puede cambiar sin tocar el dominio. Los tokens JWT y las claves de dispositivo ya
 emitidos siguen siendo válidos (mismo secreto HS256, BCrypt de costo 12 y AES-256-GCM). Por dentro aprovecha las
 goroutines: el cliente MQTT, el bot de Telegram, los trabajos periódicos y el bus de eventos corren en paralelo sin
 hilos ni cron en el servidor.
@@ -26,7 +27,7 @@ flowchart LR
   web["SmartPot-Web<br/>PWA"] -->|"REST + JWT"| api["SmartPot-API-Go<br/>:8091"]
   esp["Cultivo real<br/>ESP32 o Wokwi"] -->|"MQTT"| broker["SmartPot-Broker"]
   broker <-->|"telemetría · comandos · ACK"| api
-  api --> db[("MongoDB")]
+  api --> db[("PostgreSQL<br/>+ TimescaleDB")]
   api --> cache[("Redis")]
   api --> mail["Mailpit / SMTP"]
   api -->|"evaluación · lecturas para aprender"| ai["SmartPot-AI"]
@@ -43,8 +44,10 @@ flowchart LR
 ## Estructura del Proyecto
 
 El código vive en `internal/`, un paquete por dominio (los mismos de la versión en Java, para rastrear la
-equivalencia). Cada dominio reúne `handler.go`, `service.go`, `repository.go`, `model.go` y `dto.go`; `cmd/api` es el
-punto de entrada que cablea todo y arranca el servidor.
+equivalencia). Cada dominio reúne `handler.go`, `service.go`, `model.go`, `dto.go` y `port.go` —la interfaz
+`Repository` que el servicio necesita de la capa de datos—; las implementaciones de esos puertos sobre PostgreSQL
+viven aparte, en `internal/storage/postgres`. Así el dominio no conoce el motor de base de datos (inversión de
+dependencias / puertos y adaptadores). `cmd/api` es el punto de entrada que cablea todo y arranca el servidor.
 
 ```text
 cmd/api/                 # Punto de entrada: carga la config, cablea los componentes y arranca
@@ -53,7 +56,7 @@ internal/
 ├── httpserver/          # Motor Gin, middleware, handler central de errores y router
 ├── security/            # JWT HS256, BCrypt, AES-GCM, CORS, límite de peticiones y guardas
 ├── cache/               # Contadores y enfriamientos en Redis con respaldo en memoria
-├── mongodb/             # Cliente, creación de índices y ayudas de ObjectId
+├── storage/postgres/    # Adaptadores de los puertos Repository sobre PostgreSQL + TimescaleDB (pool y SQL)
 ├── mqtt/                # Cliente Paho, tópicos v1, parser de telemetría y aprovisionamiento en Mosquitto
 ├── mail/                # Correos de bienvenida y de recuperación de contraseña
 ├── openapi/             # Documento OpenAPI en /v3/api-docs e interfaz de Swagger en /docs
@@ -162,7 +165,7 @@ de 10 minutos por actuador.
 Cada lectura de un cultivo real también se encola para el **aprendizaje continuo** (las de los virtuales son sintéticas
 y no se envían): cada minuto la API envía el lote a la IA (`/v1/learning/readings`) con la hora local; si la IA no
 responde, el lote espera al siguiente ciclo (la cola guarda hasta 20 000 lecturas). El **panel general**
-(`/api/v1/overview`) mira la cuenta completa: las series comparativas se agregan en MongoDB con `$dateTrunc` y el
+(`/api/v1/overview`) mira la cuenta completa: las series comparativas se agregan en la hipertabla con `time_bucket` y el
 análisis de flota pide a la IA el ranking, los problemas compartidos y las acciones en bloque. La evaluación también
 lleva el **lugar** del cultivo y el **clima de afuera**, que el simulador consulta y la API guarda 10 minutos por lugar
 en Redis.
@@ -191,7 +194,7 @@ Al crear un cultivo se elige, una sola vez, de dónde vienen sus lecturas. Uno *
 para un ESP32 con el firmware, físico o simulado en Wokwi. Uno **virtual** no entrega
 credenciales: [SmartPot-DataGenerator](https://github.com/SmartPotTech/SmartPot-DataGenerator) lo simula siempre
 encendido con la cuenta del cultivo, que la API descifra y le entrega por la red interna. La PWA solo habla con la API,
-que comprueba el dueño y el tipo del cultivo en cada ruta. La configuración vive en la colección `virtual_devices`;
+que comprueba el dueño y el tipo del cultivo en cada ruta. La configuración vive en la tabla `virtual_devices`;
 pausar la simulación (`DELETE`) la marca `active: false` sin perderla y `PUT` la reanuda. Cada minuto la API reconcilia
 con el simulador y vuelve a crear las simulaciones activas que falten. Máximo 5 por cuenta. Al arrancar, un relleno
 completa el tipo y la forma de los cultivos anteriores.
@@ -201,7 +204,8 @@ completa el tipo y la forma de los cultivos anteriores.
 ### Requisitos Previos
 
 - Go 1.26 (o solo Docker)
-- MongoDB, Redis, Mailpit, el broker y el servicio de IA: el entorno completo está
+- PostgreSQL + TimescaleDB ([SmartPot-DB-Postgre](https://github.com/SmartPotTech/SmartPot-DB-Postgre)), Redis,
+  Mailpit, el broker y el servicio de IA: el entorno completo está
   en [SmartPotTech/.github](https://github.com/SmartPotTech/.github)
 
 ### Ejecución local
