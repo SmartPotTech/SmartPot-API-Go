@@ -89,6 +89,12 @@ type MQTT struct {
 	PublicTLS      bool
 	WebSocketURL   string
 	CommandTimeout time.Duration
+	// AuthnToken es el secreto que el broker (EMQX) envía al autenticar dispositivos contra la API.
+	AuthnToken string
+	// APIURL, APIKey y APISecret son la API REST de EMQX, que la API usa para cortar sesiones al rotar o borrar.
+	APIURL    string
+	APIKey    string
+	APISecret string
 }
 
 type AI struct {
@@ -201,6 +207,10 @@ func Load() (Config, error) {
 			PublicTLS:      envBool("MQTT_PUBLIC_TLS", false),
 			WebSocketURL:   env("MQTT_WEBSOCKET_URL", "ws://localhost:9001"),
 			CommandTimeout: dur("MQTT_COMMAND_TIMEOUT", "PT2M"),
+			AuthnToken:     os.Getenv("MQTT_AUTHN_TOKEN"),
+			APIURL:         env("MQTT_BROKER_API_URL", "http://broker-smartpot:18083"),
+			APIKey:         os.Getenv("MQTT_BROKER_API_KEY"),
+			APISecret:      os.Getenv("MQTT_BROKER_API_SECRET"),
 		},
 		AI: AI{
 			Enabled:            envBool("AI_ENABLED", true),
