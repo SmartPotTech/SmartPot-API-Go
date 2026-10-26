@@ -3,16 +3,19 @@ FROM golang:1.26-alpine AS build
 
 WORKDIR /src
 
-COPY go.mod go.sum ./
-RUN go mod download
-
 # Certificados para copiarlos a la imagen final (scratch no trae ninguno).
 RUN apk add --no-cache ca-certificates
 
+# Descarga de módulos con caché de BuildKit: los rebuilds no vuelven a bajar dependencias de la red.
+COPY go.mod go.sum ./
+RUN --mount=type=cache,target=/go/pkg/mod go mod download
+
 COPY . .
 # CGO desactivado + tzdata incrustada en el binario: no depende de libc ni de
-# /usr/share/zoneinfo, así la imagen de ejecución puede ser "scratch".
-RUN CGO_ENABLED=0 GOOS=linux go build -trimpath -tags timetzdata -ldflags="-s -w" -o /out/smartpot-api ./cmd/api
+# /usr/share/zoneinfo, así la imagen de ejecución puede ser "scratch". Las cachés de módulos y de compilación
+# aceleran los rebuilds sin dejar rastro en la imagen final.
+RUN --mount=type=cache,target=/go/pkg/mod --mount=type=cache,target=/root/.cache/go-build \
+    CGO_ENABLED=0 GOOS=linux go build -trimpath -tags timetzdata -ldflags="-s -w" -o /out/smartpot-api ./cmd/api
 
 # Etapa de ejecución: scratch, sin shell, sin gestor de paquetes y sin
 # herramientas de red. Un contenedor comprometido no encuentra utilidades que
