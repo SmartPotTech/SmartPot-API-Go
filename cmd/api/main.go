@@ -119,12 +119,12 @@ func run() error {
 		cfg.MQTT.CommandTimeout)
 	virtualDeviceService := virtualdevices.NewService(vdRepo, virtualCropsAdapter{crops: cropService}, simulatorClient, clock)
 
-	// MQTT: gateway, aprovisionamiento en el broker y enrutado de mensajes.
+	// MQTT: gateway, enrutado de mensajes y corte de sesiones en el broker. Con EMQX la clave del
+	// dispositivo vive en la base y el broker la consulta al conectar; no hay que registrar cuentas.
 	gateway := mqtt.NewGateway(cfg.MQTT, topics, logger)
-	provisioner := mqtt.NewProvisioner(gateway, topics, cropService, logger)
-	mqttHandler := mqtt.NewMessageHandler(topics, readingService, commandService, cropService, provisioner, logger)
+	provisioner := mqtt.NewProvisioner(cfg.MQTT, logger)
+	mqttHandler := mqtt.NewMessageHandler(topics, readingService, commandService, cropService, logger)
 	gateway.SetRouter(mqttHandler.Route)
-	gateway.SetOnConnect(provisioner.OnConnected)
 	cropService.SetProvisioner(provisioner)
 	commandService.SetPublisher(gateway)
 	gateway.Start()
@@ -194,6 +194,9 @@ func run() error {
 	// Servidor HTTP.
 	rateLimiter := security.NewRateLimiter(cacheStore, cfg.Security.RateLimitPerMinute, cfg.Security.AuthRateLimitPerMinute)
 	engine := httpserver.New(logger)
+	// El broker (EMQX) autentica los dispositivos contra este endpoint interno. Va antes del límite de
+	// tasa y de CORS: lo llama el propio broker en cada conexión, no un navegador.
+	mqtt.NewAuthnController(cfg.MQTT, cropService, topics, logger).Register(engine)
 	engine.Use(security.CORS(cfg.Security.CORSAllowedOrigins), rateLimiter.Middleware())
 
 	checker := health.Checker{
