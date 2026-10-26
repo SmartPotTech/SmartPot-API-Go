@@ -1,0 +1,146 @@
+package mqtt
+
+import (
+	"context"
+	"encoding/json"
+	"errors"
+	"log/slog"
+	"net/http"
+	"net/http/httptest"
+	"strings"
+	"testing"
+
+	"github.com/SmartPotTech/SmartPot-API-Go/internal/config"
+	"github.com/SmartPotTech/SmartPot-API-Go/internal/crops"
+	"github.com/SmartPotTech/SmartPot-API-Go/internal/platform/objectid"
+	"github.com/gin-gonic/gin"
+)
+
+const testToken = "broker-authn-token-1234567890"
+
+type fakeVerifier struct {
+	crop   *crops.Crop
+	key    string
+	hasKey bool
+	err    error
+}
+
+func (f fakeVerifier) Find(context.Context, string) (*crops.Crop, error) { return f.crop, f.err }
+func (f fakeVerifier) DeviceKey(*crops.Crop) (string, bool)              { return f.key, f.hasKey }
+
+func cropWithID(t *testing.T, hex string) *crops.Crop {
+	t.Helper()
+	oid, ok := objectid.Parse(hex)
+	if !ok {
+		t.Fatalf("id de prueba inválido: %s", hex)
+	}
+	return &crops.Crop{ID: oid}
+}
+
+func newTestController(v DeviceVerifier) *AuthnController {
+	cfg := config.MQTT{AuthnToken: testToken}
+	return NewAuthnController(cfg, v, NewTopicResolver("smartpot/v1"), slog.New(slog.DiscardHandler))
+}
+
+func doAuthn(c *AuthnController, token, body string) *httptest.ResponseRecorder {
+	gin.SetMode(gin.TestMode)
+	engine := gin.New()
+	c.Register(engine)
+	req := httptest.NewRequest(http.MethodPost, "/internal/mqtt/authn", strings.NewReader(body))
+	req.Header.Set("Content-Type", "application/json")
+	if token != "" {
+		req.Header.Set(brokerTokenHeader, token)
+	}
+	rec := httptest.NewRecorder()
+	engine.ServeHTTP(rec, req)
+	return rec
+}
+
+func decode(t *testing.T, rec *httptest.ResponseRecorder) authnResponse {
+	t.Helper()
+	var resp authnResponse
+	if err := json.Unmarshal(rec.Body.Bytes(), &resp); err != nil {
+		t.Fatalf("respuesta no es JSON válido: %v (%s)", err, rec.Body.String())
+	}
+	return resp
+}
+
+func TestAuthn_AllowsValidDeviceWithScopedACL(t *testing.T) {
+	id := "6718f0a1b2c3d4e5f6a7b8c9"
+	v := fakeVerifier{crop: cropWithID(t, id), key: "device-key-123", hasKey: true}
+	rec := doAuthn(newTestController(v), testToken, `{"username":"`+id+`","password":"device-key-123","clientid":"smartpot-`+id+`"}`)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("esperaba 200, obtuve %d", rec.Code)
+	}
+	resp := decode(t, rec)
+	if resp.Result != "allow" {
+		t.Fatalf("esperaba allow, obtuve %q", resp.Result)
+	}
+	want := []aclRule{
+		{"allow", "publish", "smartpot/v1/" + id + "/telemetry"},
+		{"allow", "publish", "smartpot/v1/" + id + "/status"},
+		{"allow", "publish", "smartpot/v1/" + id + "/commands/ack"},
+		{"allow", "subscribe", "smartpot/v1/" + id + "/commands"},
+		{"deny", "all", "#"},
+	}
+	if len(resp.ACL) != len(want) {
+		t.Fatalf("esperaba %d reglas, obtuve %d", len(want), len(resp.ACL))
+	}
+	for i, r := range want {
+		if resp.ACL[i] != r {
+			t.Errorf("regla %d: esperaba %+v, obtuve %+v", i, r, resp.ACL[i])
+		}
+	}
+}
+
+func TestAuthn_Denies(t *testing.T) {
+	id := "6718f0a1b2c3d4e5f6a7b8c9"
+	valid := fakeVerifier{crop: cropWithID(t, id), key: "device-key-123", hasKey: true}
+	body := `{"username":"` + id + `","password":"device-key-123"}`
+
+	cases := []struct {
+		name     string
+		verifier DeviceVerifier
+		token    string
+		body     string
+	}{
+		{"sin token", valid, "", body},
+		{"token incorrecto", valid, "otro-token", body},
+		{"cuerpo inválido", valid, testToken, "no-es-json"},
+		{"cultivo inexistente", fakeVerifier{crop: nil}, testToken, body},
+		{"sin clave de dispositivo (virtual)", fakeVerifier{crop: cropWithID(t, id), hasKey: false}, testToken, body},
+		{"clave incorrecta", fakeVerifier{crop: cropWithID(t, id), key: "otra", hasKey: true}, testToken, body},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			rec := doAuthn(newTestController(tc.verifier), tc.token, tc.body)
+			if rec.Code != http.StatusOK {
+				t.Fatalf("esperaba 200, obtuve %d", rec.Code)
+			}
+			if resp := decode(t, rec); resp.Result != "deny" {
+				t.Fatalf("esperaba deny, obtuve %q", resp.Result)
+			}
+		})
+	}
+}
+
+func TestAuthn_IgnoresOnDatabaseError(t *testing.T) {
+	id := "6718f0a1b2c3d4e5f6a7b8c9"
+	v := fakeVerifier{err: errors.New("base caída")}
+	rec := doAuthn(newTestController(v), testToken, `{"username":"`+id+`","password":"x"}`)
+	// 5xx: EMQX lo trata como "ignore" y no cachea un rechazo.
+	if rec.Code != http.StatusServiceUnavailable {
+		t.Fatalf("esperaba 503, obtuve %d", rec.Code)
+	}
+}
+
+func TestAuthn_EmptyTokenDeniesAll(t *testing.T) {
+	id := "6718f0a1b2c3d4e5f6a7b8c9"
+	c := NewAuthnController(config.MQTT{AuthnToken: ""}, fakeVerifier{crop: cropWithID(t, id), key: "k", hasKey: true},
+		NewTopicResolver("smartpot/v1"), slog.New(slog.DiscardHandler))
+	rec := doAuthn(c, "", `{"username":"`+id+`","password":"k"}`)
+	if resp := decode(t, rec); resp.Result != "deny" {
+		t.Fatalf("con token vacío todo debe rechazarse; obtuve %q", resp.Result)
+	}
+}
