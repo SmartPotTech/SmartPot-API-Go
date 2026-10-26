@@ -25,7 +25,6 @@ import (
 	"github.com/SmartPotTech/SmartPot-API-Go/internal/health"
 	"github.com/SmartPotTech/SmartPot-API-Go/internal/httpserver"
 	"github.com/SmartPotTech/SmartPot-API-Go/internal/mail"
-	"github.com/SmartPotTech/SmartPot-API-Go/internal/mongodb"
 	"github.com/SmartPotTech/SmartPot-API-Go/internal/mqtt"
 	"github.com/SmartPotTech/SmartPot-API-Go/internal/notifications"
 	"github.com/SmartPotTech/SmartPot-API-Go/internal/openapi"
@@ -35,6 +34,7 @@ import (
 	"github.com/SmartPotTech/SmartPot-API-Go/internal/platform/logging"
 	"github.com/SmartPotTech/SmartPot-API-Go/internal/readings"
 	"github.com/SmartPotTech/SmartPot-API-Go/internal/security"
+	"github.com/SmartPotTech/SmartPot-API-Go/internal/storage/postgres"
 	"github.com/SmartPotTech/SmartPot-API-Go/internal/users"
 	"github.com/SmartPotTech/SmartPot-API-Go/internal/virtualdevices"
 )
@@ -64,11 +64,12 @@ func run() error {
 
 	connectCtx, cancelConnect := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancelConnect()
-	mongoClient, err := mongodb.Connect(connectCtx, cfg.Mongo.URI)
+	// Adaptador de almacenamiento: PostgreSQL + TimescaleDB. La conexión es perezosa (la API arranca aunque la
+	// base no responda todavía) y /health informa el estado real.
+	pool, err := postgres.Connect(connectCtx, cfg.Database.URL, int32(cfg.Database.MaxConns))
 	if err != nil {
 		return err
 	}
-	db := mongoClient.DB
 
 	redisClient := cache.NewRedisClient(
 		fmt.Sprintf("%s:%d", cfg.Redis.Host, cfg.Redis.Port),
@@ -88,20 +89,18 @@ func run() error {
 		return err
 	}
 
-	// Repositorios.
-	userRepo := users.NewRepository(db)
-	tokenRepo := auth.NewTokenRepository(db)
-	notificationRepo := notifications.NewRepository(db)
-	cropRepo := crops.NewRepository(db)
-	readingRepo := readings.NewRepository(db)
-	actuatorRepo := actuators.NewRepository(db)
-	commandRepo := commands.NewRepository(db)
-	vdRepo := virtualdevices.NewRepository(db)
-	channelLinkRepo := channels.NewLinkRepository(db)
-	cropChannelRepo := channels.NewCropRepository(db)
-	ensureIndexes(logger, userRepo.EnsureIndexes, tokenRepo.EnsureIndexes, notificationRepo.EnsureIndexes,
-		cropRepo.EnsureIndexes, readingRepo.EnsureIndexes, actuatorRepo.EnsureIndexes, commandRepo.EnsureIndexes,
-		vdRepo.EnsureIndexes, channelLinkRepo.EnsureIndexes, cropChannelRepo.EnsureIndexes)
+	// Repositorios: adaptadores de PostgreSQL que implementan los puertos de cada dominio. El esquema (tablas,
+	// hipertabla e índices) lo crea la imagen SmartPot-DB-Postgre, no la API.
+	userRepo := postgres.NewUserRepository(pool.Pool)
+	tokenRepo := postgres.NewTokenRepository(pool.Pool)
+	notificationRepo := postgres.NewNotificationRepository(pool.Pool)
+	cropRepo := postgres.NewCropRepository(pool.Pool)
+	readingRepo := postgres.NewReadingRepository(pool.Pool)
+	actuatorRepo := postgres.NewActuatorRepository(pool.Pool)
+	commandRepo := postgres.NewCommandRepository(pool.Pool)
+	vdRepo := postgres.NewVirtualDeviceRepository(pool.Pool)
+	channelLinkRepo := postgres.NewChannelLinkRepository(pool.Pool)
+	cropChannelRepo := postgres.NewCropChannelRepository(pool.Pool)
 
 	// Servicios.
 	notificationService := notifications.NewService(notificationRepo, cacheStore, bus, clock)
@@ -201,7 +200,7 @@ func run() error {
 		Database: func() bool {
 			ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
 			defer cancel()
-			return mongoClient.Ping(ctx) == nil
+			return pool.Ping(ctx) == nil
 		},
 		Cache:     cacheStore.RedisAvailable,
 		Broker:    func() (bool, bool) { return gateway.IsEnabled(), gateway.IsConnected() },
@@ -244,6 +243,21 @@ func run() error {
 	go tick(jobsCtx, cfg.AI.LearningFlush, func() { learningFeed.Flush(context.Background()) })
 	go tick(jobsCtx, cfg.Simulator.ReconcileInterval, func() { virtualDeviceService.Reconcile(context.Background()) })
 	go tick(jobsCtx, cfg.Channels.DigestInterval, func() { digest.Run(context.Background()) })
+	// Limpieza periódica (reemplaza los índices TTL de Mongo): tokens vencidos, notificaciones a 90 días y
+	// comandos a 180 días. Las lecturas las purga la política de retención de TimescaleDB en la propia base.
+	go tick(jobsCtx, time.Hour, func() {
+		ctx := context.Background()
+		now := clock()
+		if _, err := tokenRepo.DeleteExpired(ctx, now); err != nil {
+			logger.Warn("no se pudieron purgar los tokens vencidos", "err", err)
+		}
+		if _, err := notificationRepo.DeleteOlderThan(ctx, now.Add(-90*24*time.Hour)); err != nil {
+			logger.Warn("no se pudieron purgar las notificaciones antiguas", "err", err)
+		}
+		if _, err := commandRepo.DeleteOlderThan(ctx, now.Add(-180*24*time.Hour)); err != nil {
+			logger.Warn("no se pudieron purgar los comandos antiguos", "err", err)
+		}
+	})
 
 	// Recepción de mensajes del bot de Telegram (sondeo largo o webhook).
 	telegramListener.Start()
@@ -283,16 +297,14 @@ func run() error {
 	if err := cacheStore.Close(); err != nil {
 		logger.Error("cierre de Redis con error", "err", err)
 	}
-	if err := mongoClient.Disconnect(shutdownCtx); err != nil {
-		logger.Error("desconexión de Mongo con error", "err", err)
-	}
+	pool.Close()
 	logger.Info("apagado completo")
 	return nil
 }
 
 // runCropBackfill completa el tipo, la forma y el lugar de los cultivos
 // anteriores a esos campos, usando las simulaciones para saber cuáles eran virtuales.
-func runCropBackfill(logger *slog.Logger, vdRepo *virtualdevices.Repository, cropService *crops.Service) {
+func runCropBackfill(logger *slog.Logger, vdRepo virtualdevices.Repository, cropService *crops.Service) {
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
 	vds, err := vdRepo.FindAll(ctx)
@@ -333,18 +345,6 @@ func tick(ctx context.Context, interval time.Duration, fn func()) {
 			return
 		case <-ticker.C:
 			fn()
-		}
-	}
-}
-
-// ensureIndexes crea los índices de cada repositorio al arrancar; los errores se
-// registran pero no impiden el arranque (la base puede estar aún iniciando).
-func ensureIndexes(logger *slog.Logger, ensurers ...func(context.Context) error) {
-	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
-	defer cancel()
-	for _, ensure := range ensurers {
-		if err := ensure(ctx); err != nil {
-			logger.Warn("no se pudieron crear índices", "err", err)
 		}
 	}
 }
