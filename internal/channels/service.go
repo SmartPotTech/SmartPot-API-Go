@@ -25,14 +25,14 @@ var channelNames = map[Type]string{Telegram: "Telegram"}
 
 // Service gestiona los vínculos de la cuenta con los canales externos.
 type Service struct {
-	repo     *LinkRepository
+	repo     LinkRepository
 	channels map[Type]NotificationChannel
 	cache    *cache.Store
 	clock    func() time.Time
 }
 
 // NewService crea el servicio de canales.
-func NewService(repo *LinkRepository, channels []NotificationChannel, store *cache.Store, clock func() time.Time) *Service {
+func NewService(repo LinkRepository, channels []NotificationChannel, store *cache.Store, clock func() time.Time) *Service {
 	byType := make(map[Type]NotificationChannel, len(channels))
 	for _, c := range channels {
 		byType[c.Type()] = c

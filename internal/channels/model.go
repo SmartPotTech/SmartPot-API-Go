@@ -62,12 +62,13 @@ type ChannelLink struct {
 	Failures        int                  `bson:"failures"`
 }
 
-// Recipient es un chat con el que se comparte un cultivo.
+// Recipient es un chat con el que se comparte un cultivo. Las etiquetas json fijan las claves del arreglo JSONB en
+// PostgreSQL (crop_channels.recipients).
 type Recipient struct {
-	ID          string    `bson:"id"`
-	Address     string    `bson:"address"`
-	DisplayName string    `bson:"displayName,omitempty"`
-	AddedAt     time.Time `bson:"addedAt"`
+	ID          string    `json:"id" bson:"id"`
+	Address     string    `json:"address" bson:"address"`
+	DisplayName string    `json:"displayName,omitempty" bson:"displayName,omitempty"`
+	AddedAt     time.Time `json:"addedAt" bson:"addedAt"`
 }
 
 // CropChannel define qué avisa un cultivo por un canal y a quién (colección

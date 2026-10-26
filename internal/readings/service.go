@@ -26,7 +26,7 @@ type Crops interface {
 
 // Service implementa la lógica de lecturas.
 type Service struct {
-	repo        *Repository
+	repo        Repository
 	crops       Crops
 	cache       *cache.Store
 	bus         *events.Bus
@@ -36,7 +36,7 @@ type Service struct {
 }
 
 // NewService crea el servicio de lecturas.
-func NewService(repo *Repository, crops Crops, store *cache.Store, bus *events.Bus, clock func() time.Time,
+func NewService(repo Repository, crops Crops, store *cache.Store, bus *events.Bus, clock func() time.Time,
 	minInterval time.Duration, maxPageSize int) *Service {
 	return &Service{repo: repo, crops: crops, cache: store, bus: bus, clock: clock,
 		minInterval: minInterval, maxPageSize: maxPageSize}

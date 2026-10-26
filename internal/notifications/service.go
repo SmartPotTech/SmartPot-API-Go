@@ -15,14 +15,14 @@ const notFound = "La notificación no existe"
 
 // Service implementa la lógica de notificaciones.
 type Service struct {
-	repo  *Repository
+	repo  Repository
 	cache *cache.Store
 	bus   *events.Bus
 	clock func() time.Time
 }
 
 // NewService crea el servicio de notificaciones.
-func NewService(repo *Repository, store *cache.Store, bus *events.Bus, clock func() time.Time) *Service {
+func NewService(repo Repository, store *cache.Store, bus *events.Bus, clock func() time.Time) *Service {
 	return &Service{repo: repo, cache: store, bus: bus, clock: clock}
 }
 

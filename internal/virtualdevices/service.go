@@ -40,14 +40,14 @@ type Crops interface {
 
 // Service implementa la lógica de los cultivos virtuales.
 type Service struct {
-	repo      *Repository
+	repo      Repository
 	crops     Crops
 	simulator *SimulatorClient
 	clock     func() time.Time
 }
 
 // NewService crea el servicio de dispositivos virtuales.
-func NewService(repo *Repository, crops Crops, simulator *SimulatorClient, clock func() time.Time) *Service {
+func NewService(repo Repository, crops Crops, simulator *SimulatorClient, clock func() time.Time) *Service {
 	return &Service{repo: repo, crops: crops, simulator: simulator, clock: clock}
 }
 

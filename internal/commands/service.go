@@ -25,7 +25,7 @@ type Publisher interface {
 
 // Service implementa la lógica de comandos.
 type Service struct {
-	repo      *Repository
+	repo      Repository
 	crops     *crops.Service
 	actuators *actuators.Service
 	notifier  *notifications.Service
@@ -36,7 +36,7 @@ type Service struct {
 
 // NewService crea el servicio de comandos. El publisher se fija luego con
 // SetPublisher (el gateway MQTT se construye después).
-func NewService(repo *Repository, cropsSvc *crops.Service, actuatorsSvc *actuators.Service,
+func NewService(repo Repository, cropsSvc *crops.Service, actuatorsSvc *actuators.Service,
 	notifier *notifications.Service, clock func() time.Time, timeout time.Duration) *Service {
 	return &Service{repo: repo, crops: cropsSvc, actuators: actuatorsSvc, notifier: notifier,
 		publisher: disabledPublisher{}, clock: clock, timeout: timeout}

@@ -17,13 +17,13 @@ type Crops interface {
 
 // Service implementa la lógica de actuadores.
 type Service struct {
-	repo  *Repository
+	repo  Repository
 	crops Crops
 	clock func() time.Time
 }
 
 // NewService crea el servicio de actuadores.
-func NewService(repo *Repository, crops Crops, clock func() time.Time) *Service {
+func NewService(repo Repository, crops Crops, clock func() time.Time) *Service {
 	return &Service{repo: repo, crops: crops, clock: clock}
 }
 

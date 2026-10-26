@@ -23,8 +23,8 @@ const (
 
 // Service implementa el registro, el inicio de sesión y la recuperación.
 type Service struct {
-	users           *users.Repository
-	tokens          *TokenRepository
+	users           users.Repository
+	tokens          TokenRepository
 	jwt             *security.TokenService
 	mailer          *mail.Mailer
 	notifier        *notifications.Service
@@ -34,7 +34,7 @@ type Service struct {
 }
 
 // NewService crea el servicio de autenticación.
-func NewService(userRepo *users.Repository, tokenRepo *TokenRepository, jwt *security.TokenService,
+func NewService(userRepo users.Repository, tokenRepo TokenRepository, jwt *security.TokenService,
 	mailer *mail.Mailer, notifier *notifications.Service, clock func() time.Time, resetExpiration time.Duration) *Service {
 	// Hash de relevo para que el login tarde lo mismo exista o no la cuenta.
 	dummy, _ := security.HashPassword("smartpot-timing-guard")

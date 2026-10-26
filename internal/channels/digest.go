@@ -28,11 +28,11 @@ var digestKinds = map[notifications.Type]string{
 // Digest prepara los resúmenes por cultivo (cada tantas horas y el diario),
 // revisados cada minuto dentro de la API (sin cron en el servidor).
 type Digest struct {
-	repo          *CropRepository
+	repo          CropRepository
 	channels      *Service
 	sender        *Sender
 	crops         *crops.Service
-	notifications *notifications.Repository
+	notifications notifications.Repository
 	readings      *readings.Service
 	commands      *commands.Service
 	clock         func() time.Time
@@ -41,8 +41,8 @@ type Digest struct {
 }
 
 // NewDigest crea el preparador de resúmenes.
-func NewDigest(repo *CropRepository, channels *Service, sender *Sender, cropsSvc *crops.Service,
-	notificationsRepo *notifications.Repository, readingsSvc *readings.Service, commandsSvc *commands.Service,
+func NewDigest(repo CropRepository, channels *Service, sender *Sender, cropsSvc *crops.Service,
+	notificationsRepo notifications.Repository, readingsSvc *readings.Service, commandsSvc *commands.Service,
 	clock func() time.Time, zone *time.Location, webBaseURL string) *Digest {
 	return &Digest{repo: repo, channels: channels, sender: sender, crops: cropsSvc, notifications: notificationsRepo,
 		readings: readingsSvc, commands: commandsSvc, clock: clock, zone: zone, webBaseURL: strings.TrimRight(webBaseURL, "/")}

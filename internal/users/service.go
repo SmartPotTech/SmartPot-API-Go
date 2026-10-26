@@ -15,13 +15,13 @@ type AccountDeleter func(ctx context.Context, userID string) error
 
 // Service implementa la lógica de la cuenta.
 type Service struct {
-	repo     *Repository
+	repo     Repository
 	clock    func() time.Time
 	deleters []AccountDeleter
 }
 
 // NewService crea el servicio de usuarios.
-func NewService(repo *Repository, clock func() time.Time) *Service {
+func NewService(repo Repository, clock func() time.Time) *Service {
 	return &Service{repo: repo, clock: clock}
 }
 

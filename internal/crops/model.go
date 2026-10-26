@@ -97,12 +97,13 @@ func unmarshalEnum(b []byte) (string, error) {
 	return s, nil
 }
 
-// Device son las credenciales MQTT del dispositivo; la clave se guarda cifrada.
+// Device son las credenciales MQTT del dispositivo; la clave se guarda cifrada. Las etiquetas json fijan las
+// claves del subdocumento JSONB en PostgreSQL (crops.device).
 type Device struct {
-	KeyCiphertext string     `bson:"keyCiphertext,omitempty"`
-	KeyRotatedAt  *time.Time `bson:"keyRotatedAt,omitempty"`
-	Online        bool       `bson:"online"`
-	LastSeenAt    *time.Time `bson:"lastSeenAt,omitempty"`
+	KeyCiphertext string     `json:"keyCiphertext,omitempty" bson:"keyCiphertext,omitempty"`
+	KeyRotatedAt  *time.Time `json:"keyRotatedAt,omitempty" bson:"keyRotatedAt,omitempty"`
+	Online        bool       `json:"online" bson:"online"`
+	LastSeenAt    *time.Time `json:"lastSeenAt,omitempty" bson:"lastSeenAt,omitempty"`
 }
 
 // CropHealth es la última evaluación del asistente de IA (índice de 0 a 100).

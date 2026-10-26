@@ -56,7 +56,7 @@ type CreatedCrop struct {
 
 // Service implementa la lógica de los cultivos.
 type Service struct {
-	repo        *Repository
+	repo        Repository
 	encryptor   *security.Encryptor
 	mqttPublic  MQTTPublic
 	provisioner DeviceProvisioner
@@ -67,7 +67,7 @@ type Service struct {
 }
 
 // NewService crea el servicio de cultivos.
-func NewService(repo *Repository, encryptor *security.Encryptor, mqttPublic MQTTPublic,
+func NewService(repo Repository, encryptor *security.Encryptor, mqttPublic MQTTPublic,
 	provisioner DeviceProvisioner, actuators ActuatorSeeder, notifier *notifications.Service, bus *events.Bus,
 	clock func() time.Time) *Service {
 	return &Service{
