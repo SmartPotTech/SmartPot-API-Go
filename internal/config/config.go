@@ -20,7 +20,7 @@ type Config struct {
 	Security  Security
 	Readings  Readings
 	Database  Database
-	Redis     Redis
+	Cache     Cache
 	Mail      Mail
 	MQTT      MQTT
 	AI        AI
@@ -57,7 +57,10 @@ type Database struct {
 	MaxConns int
 }
 
-type Redis struct {
+// Cache agrupa la conexión al sistema de caché. Los nombres son neutrales
+// (CACHE_*) porque el backend está detrás de un puerto; se aceptan los antiguos
+// REDIS_* por compatibilidad.
+type Cache struct {
 	Host     string
 	Port     int
 	Username string
@@ -177,12 +180,12 @@ func Load() (Config, error) {
 			URL:      env("DATABASE_URL", "postgres://smartpot:smartpot@localhost:5432/smartpot?sslmode=disable"),
 			MaxConns: envInt("DATABASE_MAX_CONNS", 10),
 		},
-		Redis: Redis{
-			Host:     env("REDIS_HOST", "localhost"),
-			Port:     envInt("REDIS_PORT", 6379),
-			Username: env("REDIS_USERNAME", ""),
-			Password: env("REDIS_PASSWORD", ""),
-			Database: envInt("REDIS_DATABASE", 0),
+		Cache: Cache{
+			Host:     envFallback("CACHE_HOST", "REDIS_HOST", "localhost"),
+			Port:     envIntFallback("CACHE_PORT", "REDIS_PORT", 6379),
+			Username: envFallback("CACHE_USERNAME", "REDIS_USERNAME", ""),
+			Password: envFallback("CACHE_PASSWORD", "REDIS_PASSWORD", ""),
+			Database: envIntFallback("CACHE_DATABASE", "REDIS_DATABASE", 0),
 			Timeout:  2 * time.Second,
 		},
 		Mail: Mail{
@@ -272,6 +275,23 @@ func envInt(key string, def int) int {
 		}
 	}
 	return def
+}
+
+// envFallback usa la variable nueva si existe; si no, la antigua; si no, el valor por defecto.
+func envFallback(primary, fallback, def string) string {
+	if v, ok := os.LookupEnv(primary); ok && v != "" {
+		return v
+	}
+	return env(fallback, def)
+}
+
+func envIntFallback(primary, fallback string, def int) int {
+	if v, ok := os.LookupEnv(primary); ok && v != "" {
+		if n, err := strconv.Atoi(strings.TrimSpace(v)); err == nil {
+			return n
+		}
+	}
+	return envInt(fallback, def)
 }
 
 func envBool(key string, def bool) bool {

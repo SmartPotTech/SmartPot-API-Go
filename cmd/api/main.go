@@ -17,6 +17,7 @@ import (
 	"github.com/SmartPotTech/SmartPot-API-Go/internal/ai"
 	"github.com/SmartPotTech/SmartPot-API-Go/internal/auth"
 	"github.com/SmartPotTech/SmartPot-API-Go/internal/cache"
+	"github.com/SmartPotTech/SmartPot-API-Go/internal/cache/valkey"
 	"github.com/SmartPotTech/SmartPot-API-Go/internal/channels"
 	"github.com/SmartPotTech/SmartPot-API-Go/internal/channels/telegram"
 	"github.com/SmartPotTech/SmartPot-API-Go/internal/commands"
@@ -71,10 +72,12 @@ func run() error {
 		return err
 	}
 
-	redisClient := cache.NewRedisClient(
-		fmt.Sprintf("%s:%d", cfg.Redis.Host, cfg.Redis.Port),
-		cfg.Redis.Username, cfg.Redis.Password, cfg.Redis.Database, cfg.Redis.Timeout)
-	cacheStore := cache.NewStore(redisClient)
+	// Adaptador de caché: Valkey detrás del puerto cache.Backend. El Store añade
+	// respaldo en memoria local si el backend no responde.
+	cacheBackend := valkey.New(
+		fmt.Sprintf("%s:%d", cfg.Cache.Host, cfg.Cache.Port),
+		cfg.Cache.Username, cfg.Cache.Password, cfg.Cache.Database, cfg.Cache.Timeout)
+	cacheStore := cache.NewStore(cacheBackend)
 
 	bus := events.NewBus()
 
@@ -205,7 +208,7 @@ func run() error {
 			defer cancel()
 			return pool.Ping(ctx) == nil
 		},
-		Cache:     cacheStore.RedisAvailable,
+		Cache:     cacheStore.Available,
 		Broker:    func() (bool, bool) { return gateway.IsEnabled(), gateway.IsConnected() },
 		AI:        func() (bool, bool) { return aiClient.IsEnabled(), aiClient.IsHealthy() },
 		Simulator: func() (bool, bool) { return simulatorClient.IsAvailable(), simulatorClient.IsHealthy() },
@@ -298,7 +301,7 @@ func run() error {
 	telegramListener.Stop()
 	gateway.Close()
 	if err := cacheStore.Close(); err != nil {
-		logger.Error("cierre de Redis con error", "err", err)
+		logger.Error("cierre de la caché con error", "err", err)
 	}
 	pool.Close()
 	logger.Info("apagado completo")
