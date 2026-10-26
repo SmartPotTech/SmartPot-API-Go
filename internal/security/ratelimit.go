@@ -15,14 +15,14 @@ import (
 // RateLimiter aplica una ventana fija de un minuto por IP. Las rutas de
 // autenticación tienen un cupo menor. OPTIONS y /health quedan exentos.
 type RateLimiter struct {
-	store        *cache.Store
+	store        cache.Cache
 	generalLimit int
 	authLimit    int
 	now          func() time.Time
 }
 
 // NewRateLimiter crea el limitador con los cupos general y de autenticación.
-func NewRateLimiter(store *cache.Store, generalLimit, authLimit int) *RateLimiter {
+func NewRateLimiter(store cache.Cache, generalLimit, authLimit int) *RateLimiter {
 	return &RateLimiter{store: store, generalLimit: generalLimit, authLimit: authLimit, now: time.Now}
 }
 
