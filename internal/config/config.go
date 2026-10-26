@@ -19,7 +19,7 @@ type Config struct {
 	Server    Server
 	Security  Security
 	Readings  Readings
-	Mongo     Mongo
+	Database  Database
 	Redis     Redis
 	Mail      Mail
 	MQTT      MQTT
@@ -52,8 +52,9 @@ type Readings struct {
 	MaxPageSize int
 }
 
-type Mongo struct {
-	URI string
+type Database struct {
+	URL      string
+	MaxConns int
 }
 
 type Redis struct {
@@ -166,8 +167,9 @@ func Load() (Config, error) {
 			MinInterval: dur("READINGS_MIN_INTERVAL", "PT5S"),
 			MaxPageSize: envInt("READINGS_MAX_PAGE_SIZE", 2000),
 		},
-		Mongo: Mongo{
-			URI: env("MONGODB_URI", "mongodb://localhost:27017/smartpot"),
+		Database: Database{
+			URL:      env("DATABASE_URL", "postgres://smartpot:smartpot@localhost:5432/smartpot?sslmode=disable"),
+			MaxConns: envInt("DATABASE_MAX_CONNS", 10),
 		},
 		Redis: Redis{
 			Host:     env("REDIS_HOST", "localhost"),
