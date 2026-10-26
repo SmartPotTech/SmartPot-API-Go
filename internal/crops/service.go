@@ -316,29 +316,8 @@ func (s *Service) RotateDeviceKey(ctx context.Context, ownerID, cropID string) (
 	return s.credentials(crop, key), nil
 }
 
-// DeviceAccount es la cuenta MQTT de un dispositivo (id del cultivo y clave en claro).
-type DeviceAccount struct {
-	CropID string
-	Key    string
-}
-
-// DeviceAccounts devuelve las cuentas de todos los cultivos con clave, para
-// sincronizar el broker al (re)conectar.
-func (s *Service) DeviceAccounts(ctx context.Context) ([]DeviceAccount, error) {
-	cropsList, err := s.repo.FindWithDeviceKey(ctx)
-	if err != nil {
-		return nil, err
-	}
-	out := make([]DeviceAccount, 0, len(cropsList))
-	for i := range cropsList {
-		if key, ok := s.DeviceKey(&cropsList[i]); ok {
-			out = append(out, DeviceAccount{CropID: cropsList[i].HexID(), Key: key})
-		}
-	}
-	return out, nil
-}
-
-// DeviceKey devuelve la clave en claro, solo para servicios internos (simulador).
+// DeviceKey devuelve la clave en claro, para los servicios internos (el simulador) y
+// para autenticar al dispositivo cuando el broker lo consulta.
 func (s *Service) DeviceKey(crop *Crop) (string, bool) {
 	if crop.Device == nil || crop.Device.KeyCiphertext == "" {
 		return "", false
