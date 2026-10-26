@@ -27,7 +27,7 @@ type AutomationAgent struct {
 	insights           *InsightService
 	commands           *commands.Service
 	notifier           *notifications.Service
-	cache              *cache.Store
+	cache              cache.Cache
 	client             *Client
 	crops              *crops.Service
 	evaluationInterval time.Duration
@@ -36,7 +36,7 @@ type AutomationAgent struct {
 
 // NewAutomationAgent crea el agente.
 func NewAutomationAgent(insights *InsightService, commandsSvc *commands.Service, notifier *notifications.Service,
-	store *cache.Store, client *Client, cropsSvc *crops.Service, evaluationInterval, automationCooldown time.Duration) *AutomationAgent {
+	store cache.Cache, client *Client, cropsSvc *crops.Service, evaluationInterval, automationCooldown time.Duration) *AutomationAgent {
 	return &AutomationAgent{insights: insights, commands: commandsSvc, notifier: notifier, cache: store,
 		client: client, crops: cropsSvc, evaluationInterval: evaluationInterval, automationCooldown: automationCooldown}
 }

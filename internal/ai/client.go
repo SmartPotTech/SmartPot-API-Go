@@ -30,7 +30,7 @@ type Client struct {
 	baseURL string
 	token   string
 	http    *http.Client
-	cache   *cache.Store
+	cache   cache.Cache
 	clock   func() time.Time
 
 	mu              sync.Mutex
@@ -39,7 +39,7 @@ type Client struct {
 }
 
 // NewClient crea el cliente del servicio de IA.
-func NewClient(cfg config.AI, store *cache.Store, clock func() time.Time) *Client {
+func NewClient(cfg config.AI, store cache.Cache, clock func() time.Time) *Client {
 	return &Client{
 		enabled: cfg.Enabled,
 		baseURL: strings.TrimRight(cfg.BaseURL, "/"),
