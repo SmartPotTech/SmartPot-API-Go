@@ -54,8 +54,8 @@ func call(probe func() bool) bool {
 	return probe != nil && probe()
 }
 
-// gated resuelve el estado de un componente opcional: DISABLED si no está
-// habilitado/disponible, si no UP o DOWN según su salud.
+// Gated resuelve el estado de un componente opcional: DISABLED si no está
+// habilitado/disponible, sino UP o DOWN según su salud.
 func gated(probe func() (bool, bool)) string {
 	if probe == nil {
 		return "DISABLED"
