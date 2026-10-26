@@ -24,12 +24,12 @@ type CropChannelService struct {
 	repo     CropRepository
 	channels *Service
 	crops    *crops.Service
-	cache    *cache.Store
+	cache    cache.Cache
 	clock    func() time.Time
 }
 
 // NewCropChannelService crea el servicio de avisos por cultivo.
-func NewCropChannelService(repo CropRepository, channels *Service, cropsSvc *crops.Service, store *cache.Store, clock func() time.Time) *CropChannelService {
+func NewCropChannelService(repo CropRepository, channels *Service, cropsSvc *crops.Service, store cache.Cache, clock func() time.Time) *CropChannelService {
 	return &CropChannelService{repo: repo, channels: channels, crops: cropsSvc, cache: store, clock: clock}
 }
 
