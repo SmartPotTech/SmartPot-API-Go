@@ -27,11 +27,11 @@ type WeatherSource interface {
 // por lugar; si falla, no reintenta en 2 minutos.
 type WeatherService struct {
 	source WeatherSource
-	cache  *cache.Store
+	cache  cache.Cache
 }
 
 // NewWeatherService crea el servicio de clima.
-func NewWeatherService(source WeatherSource, store *cache.Store) *WeatherService {
+func NewWeatherService(source WeatherSource, store cache.Cache) *WeatherService {
 	return &WeatherService{source: source, cache: store}
 }
 
