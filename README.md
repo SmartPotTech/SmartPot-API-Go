@@ -8,7 +8,7 @@
 
 ## Descripción
 
-SmartPot-API-Go es el núcleo de **SmartPot** reescrito en **Go 1.26** con **Gin**: una API REST y MQTT que conecta los
+SmartPot-API-Go es el núcleo de **SmartPot** reescrito en **Go 1.26** con **Echo**: una API REST y MQTT que conecta los
 cultivos hidropónicos, reales o virtuales, con la aplicación web. Recibe la telemetría por **MQTT**, la guarda en
 **PostgreSQL + TimescaleDB**, envía comandos a los actuadores, administra las credenciales de cada dispositivo en el
 broker y consulta al **asistente de IA** para diagnosticar cada cultivo y, si el usuario lo permite, actuar por su
@@ -60,7 +60,7 @@ cablea todo y arranca el servidor.
 cmd/api/                 # Punto de entrada: carga la config, cablea los componentes y arranca
 internal/
 ├── config/              # Carga del entorno y parser de duraciones ISO-8601 (PT5M, P7D)
-├── httpserver/          # Motor Gin, middleware, handler central de errores y router
+├── httpserver/          # Motor Echo, middleware, handler central de errores y router
 ├── security/            # JWT HS256, BCrypt, AES-GCM, CORS, límite de peticiones y guardas
 ├── cache/               # Puerto Cache + Backend y almacén resiliente con respaldo en memoria (contadores y enfriamientos)
 ├── cache/valkey/        # Adaptador del puerto Backend sobre Valkey (reemplazo libre de Redis) vía go-redis

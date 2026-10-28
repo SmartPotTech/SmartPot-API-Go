@@ -6,7 +6,7 @@ import (
 	"github.com/SmartPotTech/SmartPot-API-Go/internal/httpserver"
 	"github.com/SmartPotTech/SmartPot-API-Go/internal/platform/apperr"
 	"github.com/SmartPotTech/SmartPot-API-Go/internal/security"
-	"github.com/gin-gonic/gin"
+	"github.com/labstack/echo/v4"
 )
 
 // Handler expone las rutas de los cultivos virtuales.
@@ -20,53 +20,53 @@ func NewHandler(svc *Service) *Handler {
 }
 
 // Register monta las rutas bajo el grupo autenticado /api/v1.
-func (h *Handler) Register(g *gin.RouterGroup) {
+func (h *Handler) Register(g *echo.Group) {
 	g.GET("/crops/:cropId/virtual-device", h.get)
 	g.PUT("/crops/:cropId/virtual-device", h.configure)
 	g.DELETE("/crops/:cropId/virtual-device", h.pause)
 	g.GET("/virtual-devices/places", h.places)
 }
 
-func (h *Handler) get(c *gin.Context) {
-	res, err := h.svc.Get(c.Request.Context(), security.CurrentUserID(c), c.Param("cropId"))
+func (h *Handler) get(c echo.Context) error {
+	res, err := h.svc.Get(c.Request().Context(), security.CurrentUserID(c), c.Param("cropId"))
 	if err != nil {
 		httpserver.RespondError(c, err)
-		return
+		return nil
 	}
-	c.JSON(http.StatusOK, res)
+	return c.JSON(http.StatusOK, res)
 }
 
-func (h *Handler) configure(c *gin.Context) {
+func (h *Handler) configure(c echo.Context) error {
 	var req VirtualDeviceRequest
 	if !httpserver.Bind(c, &req) {
-		return
+		return nil
 	}
-	res, err := h.svc.Configure(c.Request.Context(), security.CurrentUserID(c), c.Param("cropId"), req)
+	res, err := h.svc.Configure(c.Request().Context(), security.CurrentUserID(c), c.Param("cropId"), req)
 	if err != nil {
 		httpserver.RespondError(c, err)
-		return
+		return nil
 	}
-	c.JSON(http.StatusOK, res)
+	return c.JSON(http.StatusOK, res)
 }
 
-func (h *Handler) pause(c *gin.Context) {
-	if err := h.svc.Pause(c.Request.Context(), security.CurrentUserID(c), c.Param("cropId")); err != nil {
+func (h *Handler) pause(c echo.Context) error {
+	if err := h.svc.Pause(c.Request().Context(), security.CurrentUserID(c), c.Param("cropId")); err != nil {
 		httpserver.RespondError(c, err)
-		return
+		return nil
 	}
-	c.Status(http.StatusNoContent)
+	return c.NoContent(http.StatusNoContent)
 }
 
-func (h *Handler) places(c *gin.Context) {
-	query, ok := c.GetQuery("q")
-	if !ok {
+func (h *Handler) places(c echo.Context) error {
+	query := c.QueryParam("q")
+	if query == "" {
 		httpserver.RespondError(c, apperr.BadRequest("Parámetro inválido o faltante"))
-		return
+		return nil
 	}
-	places, err := h.svc.Places(c.Request.Context(), query)
+	places, err := h.svc.Places(c.Request().Context(), query)
 	if err != nil {
 		httpserver.RespondError(c, err)
-		return
+		return nil
 	}
-	c.JSON(http.StatusOK, places)
+	return c.JSON(http.StatusOK, places)
 }
