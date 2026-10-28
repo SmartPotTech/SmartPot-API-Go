@@ -5,7 +5,7 @@ import (
 
 	"github.com/SmartPotTech/SmartPot-API-Go/internal/httpserver"
 	"github.com/SmartPotTech/SmartPot-API-Go/internal/security"
-	"github.com/gin-gonic/gin"
+	"github.com/labstack/echo/v4"
 )
 
 // Handler expone las rutas del asistente de IA.
@@ -20,41 +20,41 @@ func NewHandler(insights *InsightService, client *Client) *Handler {
 }
 
 // RegisterAuthed monta las rutas autenticadas bajo /api/v1.
-func (h *Handler) RegisterAuthed(g *gin.RouterGroup) {
+func (h *Handler) RegisterAuthed(g *echo.Group) {
 	g.GET("/crops/:cropId/insights", h.insightsOf)
 	g.GET("/ai/learning", h.learning)
 }
 
 // RegisterPublic monta las rutas públicas bajo /api/v1.
-func (h *Handler) RegisterPublic(g *gin.RouterGroup) {
+func (h *Handler) RegisterPublic(g *echo.Group) {
 	g.GET("/crop-profiles", h.cropProfiles)
 }
 
-func (h *Handler) insightsOf(c *gin.Context) {
-	resp, err := h.insights.ForOwner(c.Request.Context(), security.CurrentUserID(c), c.Param("cropId"))
+func (h *Handler) insightsOf(c echo.Context) error {
+	resp, err := h.insights.ForOwner(c.Request().Context(), security.CurrentUserID(c), c.Param("cropId"))
 	if err != nil {
 		httpserver.RespondError(c, err)
-		return
+		return nil
 	}
-	c.JSON(http.StatusOK, resp)
+	return c.JSON(http.StatusOK, resp)
 }
 
-func (h *Handler) learning(c *gin.Context) {
-	body, err := h.client.LearningStatusJSON(c.Request.Context())
+func (h *Handler) learning(c echo.Context) error {
+	body, err := h.client.LearningStatusJSON(c.Request().Context())
 	if err != nil {
 		httpserver.RespondError(c, err)
-		return
+		return nil
 	}
-	c.Header("Cache-Control", "private, max-age=60")
-	c.Data(http.StatusOK, "application/json; charset=utf-8", []byte(body))
+	c.Response().Header().Set("Cache-Control", "private, max-age=60")
+	return c.Blob(http.StatusOK, "application/json; charset=utf-8", []byte(body))
 }
 
-func (h *Handler) cropProfiles(c *gin.Context) {
-	body, err := h.client.CropProfilesJSON(c.Request.Context())
+func (h *Handler) cropProfiles(c echo.Context) error {
+	body, err := h.client.CropProfilesJSON(c.Request().Context())
 	if err != nil {
 		httpserver.RespondError(c, err)
-		return
+		return nil
 	}
-	c.Header("Cache-Control", "public, max-age=3600")
-	c.Data(http.StatusOK, "application/json; charset=utf-8", []byte(body))
+	c.Response().Header().Set("Cache-Control", "public, max-age=3600")
+	return c.Blob(http.StatusOK, "application/json; charset=utf-8", []byte(body))
 }

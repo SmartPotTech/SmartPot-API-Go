@@ -7,7 +7,7 @@ import (
 	"github.com/SmartPotTech/SmartPot-API-Go/internal/httpserver"
 	"github.com/SmartPotTech/SmartPot-API-Go/internal/platform/apperr"
 	"github.com/SmartPotTech/SmartPot-API-Go/internal/security"
-	"github.com/gin-gonic/gin"
+	"github.com/labstack/echo/v4"
 )
 
 // Handler expone las rutas de comandos (por cultivo y el centro de acciones).
@@ -21,65 +21,65 @@ func NewHandler(svc *Service) *Handler {
 }
 
 // Register monta las rutas bajo el grupo autenticado /api/v1.
-func (h *Handler) Register(g *gin.RouterGroup) {
+func (h *Handler) Register(g *echo.Group) {
 	g.GET("/crops/:cropId/commands", h.listForCrop)
 	g.POST("/crops/:cropId/commands", h.send)
 	g.GET("/commands", h.listForOwner)
 	g.POST("/commands/bulk", h.bulk)
 }
 
-func (h *Handler) listForCrop(c *gin.Context) {
+func (h *Handler) listForCrop(c echo.Context) error {
 	limit, ok := queryInt(c, "limit", 30)
 	if !ok {
 		httpserver.RespondError(c, apperr.BadRequest("Parámetro inválido o faltante"))
-		return
+		return nil
 	}
-	items, err := h.svc.List(c.Request.Context(), security.CurrentUserID(c), c.Param("cropId"), limit)
+	items, err := h.svc.List(c.Request().Context(), security.CurrentUserID(c), c.Param("cropId"), limit)
 	if err != nil {
 		httpserver.RespondError(c, err)
-		return
+		return nil
 	}
-	c.JSON(http.StatusOK, mapResponses(items))
+	return c.JSON(http.StatusOK, mapResponses(items))
 }
 
-func (h *Handler) send(c *gin.Context) {
+func (h *Handler) send(c echo.Context) error {
 	var req CommandRequest
 	if !httpserver.Bind(c, &req) {
-		return
+		return nil
 	}
-	cmd, err := h.svc.Request(c.Request.Context(), security.CurrentUserID(c), c.Param("cropId"), req)
+	cmd, err := h.svc.Request(c.Request().Context(), security.CurrentUserID(c), c.Param("cropId"), req)
 	if err != nil {
 		httpserver.RespondError(c, err)
-		return
+		return nil
 	}
-	c.JSON(http.StatusAccepted, ToResponse(cmd))
+	return c.JSON(http.StatusAccepted, ToResponse(cmd))
 }
 
-func (h *Handler) listForOwner(c *gin.Context) {
+func (h *Handler) listForOwner(c echo.Context) error {
 	limit, ok := queryInt(c, "limit", 50)
 	if !ok {
 		httpserver.RespondError(c, apperr.BadRequest("Parámetro inválido o faltante"))
-		return
+		return nil
 	}
-	items, err := h.svc.ListForOwner(c.Request.Context(), security.CurrentUserID(c), limit)
+	items, err := h.svc.ListForOwner(c.Request().Context(), security.CurrentUserID(c), limit)
 	if err != nil {
 		httpserver.RespondError(c, err)
-		return
+		return nil
 	}
-	c.JSON(http.StatusOK, mapResponses(items))
+	return c.JSON(http.StatusOK, mapResponses(items))
 }
 
-func (h *Handler) bulk(c *gin.Context) {
+func (h *Handler) bulk(c echo.Context) error {
 	var req BulkCommandRequest
 	if !httpserver.Bind(c, &req) {
-		return
+		return nil
 	}
-	res, err := h.svc.RequestBulk(c.Request.Context(), security.CurrentUserID(c), req)
+	res, err := h.svc.RequestBulk(c.Request().Context(), security.CurrentUserID(c), req)
 	if err != nil {
 		httpserver.RespondError(c, err)
-		return
+		return nil
 	}
-	c.JSON(http.StatusAccepted, res)
+	return c.JSON(http.StatusAccepted, res)
 }
 
 func mapResponses(items []Command) []CommandResponse {
@@ -90,8 +90,8 @@ func mapResponses(items []Command) []CommandResponse {
 	return out
 }
 
-func queryInt(c *gin.Context, key string, def int) (int, bool) {
-	raw := c.Query(key)
+func queryInt(c echo.Context, key string, def int) (int, bool) {
+	raw := c.QueryParam(key)
 	if raw == "" {
 		return def, true
 	}

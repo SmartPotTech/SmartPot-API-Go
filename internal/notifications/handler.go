@@ -7,7 +7,7 @@ import (
 	"github.com/SmartPotTech/SmartPot-API-Go/internal/httpserver"
 	"github.com/SmartPotTech/SmartPot-API-Go/internal/platform/apperr"
 	"github.com/SmartPotTech/SmartPot-API-Go/internal/security"
-	"github.com/gin-gonic/gin"
+	"github.com/labstack/echo/v4"
 )
 
 // Handler expone las rutas de notificaciones.
@@ -21,7 +21,7 @@ func NewHandler(svc *Service) *Handler {
 }
 
 // Register monta las rutas bajo el grupo autenticado /api/v1.
-func (h *Handler) Register(g *gin.RouterGroup) {
+func (h *Handler) Register(g *echo.Group) {
 	g.GET("/notifications", h.list)
 	g.GET("/notifications/unread-count", h.unreadCount)
 	g.PUT("/notifications/:id/read", h.markRead)
@@ -29,65 +29,65 @@ func (h *Handler) Register(g *gin.RouterGroup) {
 	g.DELETE("/notifications/:id", h.delete)
 }
 
-func (h *Handler) list(c *gin.Context) {
+func (h *Handler) list(c echo.Context) error {
 	unreadOnly, ok := queryBool(c, "unreadOnly", false)
 	if !ok {
 		httpserver.RespondError(c, apperr.BadRequest("Parámetro inválido o faltante"))
-		return
+		return nil
 	}
 	limit, ok := queryInt(c, "limit", 50)
 	if !ok {
 		httpserver.RespondError(c, apperr.BadRequest("Parámetro inválido o faltante"))
-		return
+		return nil
 	}
-	items, err := h.svc.List(c.Request.Context(), security.CurrentUserID(c), unreadOnly, limit)
+	items, err := h.svc.List(c.Request().Context(), security.CurrentUserID(c), unreadOnly, limit)
 	if err != nil {
 		httpserver.RespondError(c, err)
-		return
+		return nil
 	}
 	out := make([]Response, 0, len(items))
 	for _, n := range items {
 		out = append(out, ToResponse(n))
 	}
-	c.JSON(http.StatusOK, out)
+	return c.JSON(http.StatusOK, out)
 }
 
-func (h *Handler) unreadCount(c *gin.Context) {
-	n, err := h.svc.UnreadCount(c.Request.Context(), security.CurrentUserID(c))
+func (h *Handler) unreadCount(c echo.Context) error {
+	n, err := h.svc.UnreadCount(c.Request().Context(), security.CurrentUserID(c))
 	if err != nil {
 		httpserver.RespondError(c, err)
-		return
+		return nil
 	}
-	c.JSON(http.StatusOK, gin.H{"unread": n})
+	return c.JSON(http.StatusOK, echo.Map{"unread": n})
 }
 
-func (h *Handler) markRead(c *gin.Context) {
-	n, err := h.svc.MarkRead(c.Request.Context(), security.CurrentUserID(c), c.Param("id"))
+func (h *Handler) markRead(c echo.Context) error {
+	n, err := h.svc.MarkRead(c.Request().Context(), security.CurrentUserID(c), c.Param("id"))
 	if err != nil {
 		httpserver.RespondError(c, err)
-		return
+		return nil
 	}
-	c.JSON(http.StatusOK, ToResponse(*n))
+	return c.JSON(http.StatusOK, ToResponse(*n))
 }
 
-func (h *Handler) markAllRead(c *gin.Context) {
-	if err := h.svc.MarkAllRead(c.Request.Context(), security.CurrentUserID(c)); err != nil {
+func (h *Handler) markAllRead(c echo.Context) error {
+	if err := h.svc.MarkAllRead(c.Request().Context(), security.CurrentUserID(c)); err != nil {
 		httpserver.RespondError(c, err)
-		return
+		return nil
 	}
-	c.Status(http.StatusNoContent)
+	return c.NoContent(http.StatusNoContent)
 }
 
-func (h *Handler) delete(c *gin.Context) {
-	if err := h.svc.Delete(c.Request.Context(), security.CurrentUserID(c), c.Param("id")); err != nil {
+func (h *Handler) delete(c echo.Context) error {
+	if err := h.svc.Delete(c.Request().Context(), security.CurrentUserID(c), c.Param("id")); err != nil {
 		httpserver.RespondError(c, err)
-		return
+		return nil
 	}
-	c.Status(http.StatusNoContent)
+	return c.NoContent(http.StatusNoContent)
 }
 
-func queryBool(c *gin.Context, key string, def bool) (bool, bool) {
-	raw := c.Query(key)
+func queryBool(c echo.Context, key string, def bool) (bool, bool) {
+	raw := c.QueryParam(key)
 	if raw == "" {
 		return def, true
 	}
@@ -95,8 +95,8 @@ func queryBool(c *gin.Context, key string, def bool) (bool, bool) {
 	return v, err == nil
 }
 
-func queryInt(c *gin.Context, key string, def int) (int, bool) {
-	raw := c.Query(key)
+func queryInt(c echo.Context, key string, def int) (int, bool) {
+	raw := c.QueryParam(key)
 	if raw == "" {
 		return def, true
 	}
