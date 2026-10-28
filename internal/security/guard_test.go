@@ -7,7 +7,7 @@ import (
 	"time"
 
 	"github.com/SmartPotTech/SmartPot-API-Go/internal/httpserver"
-	"github.com/gin-gonic/gin"
+	"github.com/labstack/echo/v4"
 )
 
 func TestGuard(t *testing.T) {
@@ -17,7 +17,7 @@ func TestGuard(t *testing.T) {
 	e := httpserver.New(discardLogger())
 	grp := e.Group("/api/v1")
 	grp.Use(svc.Guard())
-	grp.GET("/me", func(c *gin.Context) { c.String(http.StatusOK, CurrentUserID(c)) })
+	grp.GET("/me", func(c echo.Context) error { return c.String(http.StatusOK, CurrentUserID(c)) })
 
 	send := func(authHeader string) *httptest.ResponseRecorder {
 		rec := httptest.NewRecorder()

@@ -11,7 +11,7 @@ import (
 
 	"github.com/SmartPotTech/SmartPot-API-Go/internal/cache"
 	"github.com/SmartPotTech/SmartPot-API-Go/internal/httpserver"
-	"github.com/gin-gonic/gin"
+	"github.com/labstack/echo/v4"
 )
 
 func discardLogger() *slog.Logger {
@@ -25,13 +25,14 @@ func TestRateLimiter(t *testing.T) {
 
 	e := httpserver.New(discardLogger())
 	e.Use(rl.Middleware())
-	e.GET("/api/v1/ping", func(c *gin.Context) { c.String(http.StatusOK, "ok") })
-	e.POST("/api/v1/auth/login", func(c *gin.Context) { c.String(http.StatusOK, "ok") })
+	e.GET("/api/v1/ping", func(c echo.Context) error { return c.String(http.StatusOK, "ok") })
+	e.POST("/api/v1/auth/login", func(c echo.Context) error { return c.String(http.StatusOK, "ok") })
 
 	send := func(method, path string) *httptest.ResponseRecorder {
 		rec := httptest.NewRecorder()
 		req := httptest.NewRequest(method, path, nil)
 		req.RemoteAddr = "203.0.113.5:4444"
+		req.Header.Set("X-Forwarded-For", "203.0.113.5")
 		e.ServeHTTP(rec, req)
 		return rec
 	}
