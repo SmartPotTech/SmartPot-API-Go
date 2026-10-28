@@ -60,8 +60,8 @@ cablea todo y arranca el servidor.
 cmd/api/                 # Punto de entrada: carga la config, cablea los componentes y arranca
 internal/
 ├── config/              # Carga del entorno y parser de duraciones ISO-8601 (PT5M, P7D)
-├── httpserver/          # Motor Echo, middleware, handler central de errores y router
-├── security/            # JWT HS256, BCrypt, AES-GCM, CORS, límite de peticiones y guardas
+├── httpserver/          # Motor Echo, RequestContext tipado (sync.Pool), validador desacoplado y HTTPErrorHandler central
+├── security/            # JWT HS256, BCrypt, AES-GCM, CORS, límite de peticiones y guardas tipadas
 ├── cache/               # Puerto Cache + Backend y almacén resiliente con respaldo en memoria (contadores y enfriamientos)
 ├── cache/valkey/        # Adaptador del puerto Backend sobre Valkey (reemplazo libre de Redis) vía go-redis
 ├── storage/postgres/    # Adaptadores de los puertos Repository sobre PostgreSQL + TimescaleDB (pool y SQL)
@@ -86,6 +86,14 @@ internal/
 Spring aporta beans, `@Scheduled`, eventos y validación declarativa; aquí eso se traduce en: cableado explícito en
 `cmd/api`, goroutines con `time.Ticker` canceladas por `context` al apagar, un bus de eventos en proceso
 (`platform/events`) y un validador propio con los mismos mensajes en español.
+
+La capa HTTP (`internal/httpserver` e `internal/security`) se apoya en cinco decisiones de diseño propias de Echo:
+
+- **Contexto tipado en tiempo de compilación (`*httpserver.RequestContext`).** Como `echo.Context` es una interfaz desacoplada, cada petición envuelve el contexto base en un `RequestContext` reciclado mediante `sync.Pool` que expone campos tipados para la identidad del usuario, las credenciales JWT (`Identity`) y la traza de telemetría (`TelemetryTrace`), sin mapas de cadenas (`c.Set`/`c.Get`) ni conversiones de tipo en tiempo de ejecución.
+- **Retorno explícito de error y `HTTPErrorHandler` centralizado.** Todos los manejadores usan la firma idiomática `func(echo.Context) error` y devuelven directamente los errores de dominio (`*apperr.Error`) o de validación (`*apperr.ValidationError`) para que el `HTTPErrorHandler` central los transforme en respuestas JSON homogéneas sin riesgo de ejecuciones residuales.
+- **Composición lineal de middlewares.** La tubería HTTP (`requestLogger`, `recoverer`, cabeceras de seguridad, CORS, límite de tasa y `Guard`) se construye por composición funcional `func(next echo.HandlerFunc) echo.HandlerFunc`.
+- **Árbol Radix *zero-allocation*.** La resolución de rutas y la extracción de parámetros (`c.Param`) operan sobre el árbol Radix de Echo sin asignaciones dinámicas en el *heap* (`0 allocs/op` verificado en pruebas), aplanando el impacto del recolector de basura bajo concurrencia continua.
+- **Validación intercambiable (`echo.Validator`).** `httpserver.Bind` delega en `c.Validate(req)` a través de la interfaz `echo.Validator`, manteniendo las reglas de `platform/validation` desacopladas del transporte y sin dependencias externas de reflexión.
 
 ## Contrato REST
 
