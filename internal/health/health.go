@@ -6,7 +6,7 @@ package health
 import (
 	"net/http"
 
-	"github.com/gin-gonic/gin"
+	"github.com/labstack/echo/v4"
 )
 
 // Checker reúne las sondas de cada dependencia. Los componentes que todavía no
@@ -28,9 +28,9 @@ type response struct {
 	Simulator string `json:"simulator"`
 }
 
-// Handler devuelve el manejador Gin de /health.
-func (h Checker) Handler() gin.HandlerFunc {
-	return func(c *gin.Context) {
+// Handler devuelve el manejador Echo de /health.
+func (h Checker) Handler() echo.HandlerFunc {
+	return func(c echo.Context) error {
 		database := call(h.Database)
 
 		body := response{
@@ -46,7 +46,7 @@ func (h Checker) Handler() gin.HandlerFunc {
 		if !database {
 			status = http.StatusServiceUnavailable
 		}
-		c.JSON(status, body)
+		return c.JSON(status, body)
 	}
 }
 

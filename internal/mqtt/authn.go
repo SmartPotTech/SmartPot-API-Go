@@ -3,12 +3,13 @@ package mqtt
 import (
 	"context"
 	"crypto/subtle"
+	"encoding/json"
 	"log/slog"
 	"net/http"
 
 	"github.com/SmartPotTech/SmartPot-API-Go/internal/config"
 	"github.com/SmartPotTech/SmartPot-API-Go/internal/crops"
-	"github.com/gin-gonic/gin"
+	"github.com/labstack/echo/v4"
 )
 
 // brokerTokenHeader es la cabecera con el secreto compartido que el broker envía en cada llamada.
@@ -41,11 +42,11 @@ func NewAuthnController(cfg config.MQTT, cropsSvc DeviceVerifier, topics *TopicR
 }
 
 // Register monta la ruta interna fuera de /api/v1 (sin JWT ni límite de tasa).
-func (c *AuthnController) Register(engine gin.IRouter) {
+func (c *AuthnController) Register(engine *echo.Echo) {
 	engine.POST("/internal/mqtt/authn", c.authenticate)
 	// Sonda de salud: el broker comprueba que el endpoint responde; así marca el recurso como conectado.
-	engine.GET("/internal/mqtt/authn", func(ctx *gin.Context) {
-		ctx.JSON(http.StatusOK, gin.H{"status": "ok"})
+	engine.GET("/internal/mqtt/authn", func(ctx echo.Context) error {
+		return ctx.JSON(http.StatusOK, echo.Map{"status": "ok"})
 	})
 }
 
@@ -69,33 +70,28 @@ type authnResponse struct {
 
 var deny = authnResponse{Result: "deny"}
 
-func (c *AuthnController) authenticate(ctx *gin.Context) {
-	if !c.authorized(ctx.GetHeader(brokerTokenHeader)) {
-		ctx.JSON(http.StatusOK, deny)
-		return
+func (c *AuthnController) authenticate(ctx echo.Context) error {
+	if !c.authorized(ctx.Request().Header.Get(brokerTokenHeader)) {
+		return ctx.JSON(http.StatusOK, deny)
 	}
 	var req authnRequest
-	if err := ctx.ShouldBindJSON(&req); err != nil {
-		ctx.JSON(http.StatusOK, deny)
-		return
+	if err := json.NewDecoder(ctx.Request().Body).Decode(&req); err != nil {
+		return ctx.JSON(http.StatusOK, deny)
 	}
-	crop, err := c.crops.Find(ctx.Request.Context(), req.Username)
+	crop, err := c.crops.Find(ctx.Request().Context(), req.Username)
 	if err != nil {
 		// Error real de la base: 5xx para que EMQX lo trate como "ignore" y no cachee un rechazo.
 		c.log.Warn("no se pudo verificar el dispositivo contra la base", "cropId", req.Username, "err", err)
-		ctx.JSON(http.StatusServiceUnavailable, authnResponse{})
-		return
+		return ctx.JSON(http.StatusServiceUnavailable, authnResponse{})
 	}
 	if crop == nil {
-		ctx.JSON(http.StatusOK, deny)
-		return
+		return ctx.JSON(http.StatusOK, deny)
 	}
 	key, ok := c.crops.DeviceKey(crop)
 	if !ok || subtle.ConstantTimeCompare([]byte(key), []byte(req.Password)) != 1 {
-		ctx.JSON(http.StatusOK, deny)
-		return
+		return ctx.JSON(http.StatusOK, deny)
 	}
-	ctx.JSON(http.StatusOK, authnResponse{Result: "allow", ACL: c.deviceACL(crop.HexID())})
+	return ctx.JSON(http.StatusOK, authnResponse{Result: "allow", ACL: c.deviceACL(crop.HexID())})
 }
 
 // deviceACL acota el dispositivo a los tópicos de su propio cultivo; lo demás se niega.

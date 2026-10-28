@@ -7,7 +7,7 @@ package openapi
 import (
 	"strings"
 
-	"github.com/gin-gonic/gin"
+	"github.com/labstack/echo/v4"
 )
 
 // route describe una operación para el documento.
@@ -93,50 +93,50 @@ var routes = []route{
 }
 
 // Document arma el documento OpenAPI 3.0.1 completo.
-func Document(publicAPIURL string) gin.H {
-	paths := gin.H{}
+func Document(publicAPIURL string) echo.Map {
+	paths := echo.Map{}
 	for _, r := range routes {
-		item, ok := paths[r.path].(gin.H)
+		item, ok := paths[r.path].(echo.Map)
 		if !ok {
-			item = gin.H{}
+			item = echo.Map{}
 			paths[r.path] = item
 		}
 		item[strings.ToLower(r.method)] = operation(r)
 	}
-	return gin.H{
+	return echo.Map{
 		"openapi": "3.0.1",
-		"info": gin.H{
+		"info": echo.Map{
 			"title":   "SmartPot API",
 			"version": "2.0.0",
 			"description": "API de SmartPot para monitorear y automatizar cultivos hidropónicos: cuentas, " +
 				"cultivos, telemetría, actuadores, comandos por MQTT y asistente de IA.",
-			"contact": gin.H{"name": "SmartPot Tech", "url": "https://github.com/SmartPotTech"},
-			"license": gin.H{"name": "MIT", "url": "https://opensource.org/licenses/MIT"},
+			"contact": echo.Map{"name": "SmartPot Tech", "url": "https://github.com/SmartPotTech"},
+			"license": echo.Map{"name": "MIT", "url": "https://opensource.org/licenses/MIT"},
 		},
-		"servers":  []gin.H{{"url": publicAPIURL, "description": "Servidor de la API"}},
-		"security": []gin.H{{"bearer": []string{}}},
+		"servers":  []echo.Map{{"url": publicAPIURL, "description": "Servidor de la API"}},
+		"security": []echo.Map{{"bearer": []string{}}},
 		"paths":    paths,
-		"components": gin.H{
-			"securitySchemes": gin.H{
-				"bearer": gin.H{
+		"components": echo.Map{
+			"securitySchemes": echo.Map{
+				"bearer": echo.Map{
 					"type":         "http",
 					"scheme":       "bearer",
 					"bearerFormat": "JWT",
 					"description":  "Token recibido en /api/v1/auth/login o /api/v1/auth/register",
 				},
 			},
-			"schemas": gin.H{"ErrorResponse": errorSchema()},
+			"schemas": echo.Map{"ErrorResponse": errorSchema()},
 		},
 	}
 }
 
-func operation(r route) gin.H {
-	op := gin.H{
+func operation(r route) echo.Map {
+	op := echo.Map{
 		"tags":        []string{r.tag},
 		"summary":     r.summary,
 		"operationId": operationID(r),
-		"responses": gin.H{
-			"200": gin.H{"description": "Operación correcta"},
+		"responses": echo.Map{
+			"200": echo.Map{"description": "Operación correcta"},
 			"400": errorRef("Solicitud inválida"),
 			"401": errorRef("No autenticado"),
 			"403": errorRef("Sin permiso"),
@@ -148,44 +148,44 @@ func operation(r route) gin.H {
 	}
 	if r.public {
 		// Anula el requisito global de token para las rutas públicas.
-		op["security"] = []gin.H{}
+		op["security"] = []echo.Map{}
 	}
 	return op
 }
 
-func errorRef(description string) gin.H {
-	return gin.H{
+func errorRef(description string) echo.Map {
+	return echo.Map{
 		"description": description,
-		"content":     gin.H{"application/json": gin.H{"schema": gin.H{"$ref": "#/components/schemas/ErrorResponse"}}},
+		"content":     echo.Map{"application/json": echo.Map{"schema": echo.Map{"$ref": "#/components/schemas/ErrorResponse"}}},
 	}
 }
 
-func errorSchema() gin.H {
-	return gin.H{
+func errorSchema() echo.Map {
+	return echo.Map{
 		"type": "object",
-		"properties": gin.H{
-			"status":    gin.H{"type": "integer", "format": "int32"},
-			"error":     gin.H{"type": "string"},
-			"message":   gin.H{"type": "string"},
-			"path":      gin.H{"type": "string"},
-			"timestamp": gin.H{"type": "string", "format": "date-time"},
-			"fields": gin.H{
+		"properties": echo.Map{
+			"status":    echo.Map{"type": "integer", "format": "int32"},
+			"error":     echo.Map{"type": "string"},
+			"message":   echo.Map{"type": "string"},
+			"path":      echo.Map{"type": "string"},
+			"timestamp": echo.Map{"type": "string", "format": "date-time"},
+			"fields": echo.Map{
 				"type":                 "object",
-				"additionalProperties": gin.H{"type": "string"},
+				"additionalProperties": echo.Map{"type": "string"},
 			},
 		},
 	}
 }
 
 // pathParams arma los parámetros de ruta a partir de los {segmentos} del camino.
-func pathParams(path string) []gin.H {
-	var out []gin.H
+func pathParams(path string) []echo.Map {
+	var out []echo.Map
 	for _, seg := range strings.Split(path, "/") {
 		if len(seg) >= 2 && seg[0] == '{' && seg[len(seg)-1] == '}' {
 			name := seg[1 : len(seg)-1]
-			out = append(out, gin.H{
+			out = append(out, echo.Map{
 				"name": name, "in": "path", "required": true,
-				"schema": gin.H{"type": "string"},
+				"schema": echo.Map{"type": "string"},
 			})
 		}
 	}

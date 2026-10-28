@@ -13,7 +13,7 @@ import (
 	"github.com/SmartPotTech/SmartPot-API-Go/internal/config"
 	"github.com/SmartPotTech/SmartPot-API-Go/internal/crops"
 	"github.com/SmartPotTech/SmartPot-API-Go/internal/platform/objectid"
-	"github.com/gin-gonic/gin"
+	"github.com/labstack/echo/v4"
 )
 
 const testToken = "broker-authn-token-1234567890"
@@ -43,16 +43,15 @@ func newTestController(v DeviceVerifier) *AuthnController {
 }
 
 func doAuthn(c *AuthnController, token, body string) *httptest.ResponseRecorder {
-	gin.SetMode(gin.TestMode)
-	engine := gin.New()
-	c.Register(engine)
+	e := echo.New()
+	c.Register(e)
 	req := httptest.NewRequest(http.MethodPost, "/internal/mqtt/authn", strings.NewReader(body))
 	req.Header.Set("Content-Type", "application/json")
 	if token != "" {
 		req.Header.Set(brokerTokenHeader, token)
 	}
 	rec := httptest.NewRecorder()
-	engine.ServeHTTP(rec, req)
+	e.ServeHTTP(rec, req)
 	return rec
 }
 
@@ -129,7 +128,7 @@ func TestAuthn_IgnoresOnDatabaseError(t *testing.T) {
 	id := "6718f0a1b2c3d4e5f6a7b8c9"
 	v := fakeVerifier{err: errors.New("base caída")}
 	rec := doAuthn(newTestController(v), testToken, `{"username":"`+id+`","password":"x"}`)
-	// 5xx: EMQX lo trata como "ignore" y no cachea un rechazo.
+	// 5xx: EMQX lo trata como "ignore" y no cachee un rechazo.
 	if rec.Code != http.StatusServiceUnavailable {
 		t.Fatalf("esperaba 503, obtuve %d", rec.Code)
 	}

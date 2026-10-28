@@ -5,7 +5,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/gin-gonic/gin"
+	"github.com/labstack/echo/v4"
 )
 
 func TestDocumentMetadata(t *testing.T) {
@@ -13,36 +13,36 @@ func TestDocumentMetadata(t *testing.T) {
 	if doc["openapi"] != "3.0.1" {
 		t.Errorf("versión openapi = %v", doc["openapi"])
 	}
-	info := doc["info"].(gin.H)
+	info := doc["info"].(echo.Map)
 	if info["title"] != "SmartPot API" || info["version"] != "2.0.0" {
 		t.Errorf("info = %v", info)
 	}
-	servers := doc["servers"].([]gin.H)
+	servers := doc["servers"].([]echo.Map)
 	if len(servers) != 1 || servers[0]["url"] != "https://api.smartpot.app" {
 		t.Errorf("servers = %v", servers)
 	}
-	comps := doc["components"].(gin.H)
-	bearer := comps["securitySchemes"].(gin.H)["bearer"].(gin.H)
+	comps := doc["components"].(echo.Map)
+	bearer := comps["securitySchemes"].(echo.Map)["bearer"].(echo.Map)
 	if bearer["scheme"] != "bearer" || bearer["bearerFormat"] != "JWT" {
 		t.Errorf("esquema bearer = %v", bearer)
 	}
-	if _, ok := comps["schemas"].(gin.H)["ErrorResponse"]; !ok {
+	if _, ok := comps["schemas"].(echo.Map)["ErrorResponse"]; !ok {
 		t.Error("falta el esquema ErrorResponse")
 	}
 }
 
 // Todas las operaciones del catálogo deben aparecer exactamente una vez.
 func TestDocumentRendersEveryRoute(t *testing.T) {
-	paths := Document("http://x")["paths"].(gin.H)
+	paths := Document("http://x")["paths"].(echo.Map)
 	count := 0
 	for _, item := range paths {
-		count += len(item.(gin.H))
+		count += len(item.(echo.Map))
 	}
 	if count != len(routes) {
 		t.Fatalf("operaciones renderizadas %d, se esperaban %d", count, len(routes))
 	}
 	for _, r := range routes {
-		item, ok := paths[r.path].(gin.H)
+		item, ok := paths[r.path].(echo.Map)
 		if !ok {
 			t.Fatalf("falta el camino %s", r.path)
 		}
@@ -54,24 +54,24 @@ func TestDocumentRendersEveryRoute(t *testing.T) {
 
 // Las rutas públicas anulan el token con security: []; las demás lo heredan.
 func TestSecurityOverrides(t *testing.T) {
-	paths := Document("http://x")["paths"].(gin.H)
+	paths := Document("http://x")["paths"].(echo.Map)
 
-	login := paths["/api/v1/auth/login"].(gin.H)["post"].(gin.H)
-	sec, ok := login["security"].([]gin.H)
+	login := paths["/api/v1/auth/login"].(echo.Map)["post"].(echo.Map)
+	sec, ok := login["security"].([]echo.Map)
 	if !ok || len(sec) != 0 {
 		t.Errorf("login debería tener security: [] (sin token), se obtuvo %v", login["security"])
 	}
 
-	list := paths["/api/v1/crops"].(gin.H)["get"].(gin.H)
+	list := paths["/api/v1/crops"].(echo.Map)["get"].(echo.Map)
 	if _, has := list["security"]; has {
 		t.Errorf("una ruta autenticada no debe fijar security propio (hereda el global): %v", list["security"])
 	}
 }
 
 func TestPathParameters(t *testing.T) {
-	paths := Document("http://x")["paths"].(gin.H)
-	op := paths["/api/v1/crops/{cropId}/channels/{type}/recipients/{recipientId}"].(gin.H)["delete"].(gin.H)
-	params, ok := op["parameters"].([]gin.H)
+	paths := Document("http://x")["paths"].(echo.Map)
+	op := paths["/api/v1/crops/{cropId}/channels/{type}/recipients/{recipientId}"].(echo.Map)["delete"].(echo.Map)
+	params, ok := op["parameters"].([]echo.Map)
 	if !ok || len(params) != 3 {
 		t.Fatalf("se esperaban 3 parámetros de ruta, se obtuvo %v", op["parameters"])
 	}

@@ -3,7 +3,7 @@ package openapi
 import (
 	"net/http"
 
-	"github.com/gin-gonic/gin"
+	"github.com/labstack/echo/v4"
 )
 
 // swaggerUIVersion fija la versión de la interfaz de Swagger servida desde el CDN.
@@ -12,15 +12,14 @@ const swaggerUIVersion = "5.17.14"
 // Register monta la documentación: el JSON OpenAPI en /v3/api-docs y la interfaz
 // de Swagger en /docs, ambos en la raíz (no bajo /api/v1), igual que springdoc.
 // Si API_DOCS_ENABLED es falso, no se monta ninguna de las dos.
-func Register(engine *gin.Engine, publicAPIURL string, enabled bool) {
+func Register(engine *echo.Echo, publicAPIURL string, enabled bool) {
 	if !enabled {
 		return
 	}
 	doc := Document(publicAPIURL)
-	engine.GET("/v3/api-docs", func(c *gin.Context) { c.JSON(http.StatusOK, doc) })
-	engine.GET("/docs", func(c *gin.Context) {
-		c.Header("Content-Type", "text/html; charset=utf-8")
-		c.String(http.StatusOK, swaggerUIPage)
+	engine.GET("/v3/api-docs", func(c echo.Context) error { return c.JSON(http.StatusOK, doc) })
+	engine.GET("/docs", func(c echo.Context) error {
+		return c.HTML(http.StatusOK, swaggerUIPage)
 	})
 }
 
