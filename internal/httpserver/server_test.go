@@ -209,3 +209,40 @@ func TestHTTPServer_RadixZeroAllocation(t *testing.T) {
 		t.Fatalf("parámetros mal extraídos: crop=%q actuator=%q", capturedCrop, capturedActuator)
 	}
 }
+
+func TestHTTPServer_ETagConditionalGET(t *testing.T) {
+	e := New(testLogger())
+	e.GET("/api/v1/crops", func(c echo.Context) error {
+		return c.JSON(http.StatusOK, map[string]string{"name": "Albahaca"})
+	})
+
+	req1 := httptest.NewRequest(http.MethodGet, "/api/v1/crops", nil)
+	rec1 := httptest.NewRecorder()
+	e.ServeHTTP(rec1, req1)
+
+	if rec1.Code != http.StatusOK {
+		t.Fatalf("se esperaba 200 en la primera lectura, se obtuvo %d", rec1.Code)
+	}
+	etag := rec1.Header().Get("ETag")
+	if !strings.HasPrefix(etag, `W/"`) {
+		t.Fatalf("se esperaba cabecera ETag débil, se obtuvo %q", etag)
+	}
+	if rec1.Header().Get("Cache-Control") != "private, no-cache" {
+		t.Errorf("Cache-Control inesperado: %q", rec1.Header().Get("Cache-Control"))
+	}
+
+	req2 := httptest.NewRequest(http.MethodGet, "/api/v1/crops", nil)
+	req2.Header.Set("If-None-Match", etag)
+	rec2 := httptest.NewRecorder()
+	e.ServeHTTP(rec2, req2)
+
+	if rec2.Code != http.StatusNotModified {
+		t.Fatalf("se esperaba 304 Not Modified con If-None-Match coincidente, se obtuvo %d", rec2.Code)
+	}
+	if rec2.Body.Len() != 0 {
+		t.Errorf("se esperaba cuerpo vacío en 304, se obtuvieron %d bytes", rec2.Body.Len())
+	}
+	if rec2.Header().Get("ETag") != etag {
+		t.Errorf("se esperaba conservar ETag %q en 304, se obtuvo %q", etag, rec2.Header().Get("ETag"))
+	}
+}

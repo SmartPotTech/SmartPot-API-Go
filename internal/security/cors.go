@@ -14,8 +14,8 @@ func CORS(allowedOrigins []string) echo.MiddlewareFunc {
 	return middleware.CORSWithConfig(middleware.CORSConfig{
 		AllowOrigins:     allowedOrigins,
 		AllowMethods:     []string{"GET", "POST", "PUT", "PATCH", "DELETE", "OPTIONS"},
-		AllowHeaders:     []string{"Authorization", "Content-Type", "Accept"},
-		ExposeHeaders:    []string{"Retry-After"},
+		AllowHeaders:     []string{"Authorization", "Content-Type", "Accept", "If-None-Match"},
+		ExposeHeaders:    []string{"Retry-After", "ETag"},
 		AllowCredentials: false,
 		MaxAge:           int(time.Hour / time.Second),
 	})

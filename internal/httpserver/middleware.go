@@ -1,10 +1,14 @@
 package httpserver
 
 import (
+	"bytes"
+	"crypto/sha256"
+	"encoding/hex"
 	"errors"
 	"fmt"
 	"log/slog"
 	"net/http"
+	"strings"
 	"time"
 
 	"github.com/SmartPotTech/SmartPot-API-Go/internal/platform/apperr"
@@ -74,6 +78,83 @@ func securityHeaders() echo.MiddlewareFunc {
 			c.Response().Header().Set("X-Frame-Options", "DENY")
 			c.Response().Header().Set("X-Content-Type-Options", "nosniff")
 			return next(c)
+		}
+	}
+}
+
+type etagBufferWriter struct {
+	http.ResponseWriter
+	buf    bytes.Buffer
+	status int
+}
+
+func (w *etagBufferWriter) WriteHeader(code int) {
+	w.status = code
+}
+
+func (w *etagBufferWriter) Write(b []byte) (int, error) {
+	if w.status == 0 {
+		w.status = http.StatusOK
+	}
+	return w.buf.Write(b)
+}
+
+// etagMiddleware calcula una etiqueta ETag débil (SHA-256 truncado a 128 bits)
+// para respuestas JSON 200 de lecturas GET y responde 304 Not Modified sin
+// transferir cuerpo cuando el cliente envía una cabecera If-None-Match coincidente.
+func etagMiddleware() echo.MiddlewareFunc {
+	return func(next echo.HandlerFunc) echo.HandlerFunc {
+		return func(c echo.Context) error {
+			req := c.Request()
+			if req.Method != http.MethodGet {
+				return next(c)
+			}
+			res := c.Response()
+			origWriter := res.Writer
+			bw := &etagBufferWriter{ResponseWriter: origWriter}
+			res.Writer = bw
+			defer func() {
+				res.Writer = origWriter
+			}()
+
+			err := next(c)
+			if err != nil {
+				res.Writer = origWriter
+				if bw.status != 0 || bw.buf.Len() > 0 {
+					origWriter.WriteHeader(bw.status)
+					_, _ = origWriter.Write(bw.buf.Bytes())
+				}
+				return err
+			}
+
+			status := bw.status
+			if status == 0 {
+				status = res.Status
+			}
+			if status == 0 {
+				status = http.StatusOK
+			}
+			body := bw.buf.Bytes()
+			if status == http.StatusOK && len(body) > 0 && strings.HasPrefix(res.Header().Get(echo.HeaderContentType), echo.MIMEApplicationJSON) {
+				sum := sha256.Sum256(body)
+				etag := `W/"` + hex.EncodeToString(sum[:16]) + `"`
+				res.Header().Set("ETag", etag)
+				if res.Header().Get("Cache-Control") == "" {
+					res.Header().Set("Cache-Control", "private, no-cache")
+				}
+				if match := strings.TrimSpace(req.Header.Get("If-None-Match")); match != "" && match == etag {
+					res.Status = http.StatusNotModified
+					res.Size = 0
+					origWriter.WriteHeader(http.StatusNotModified)
+					return nil
+				}
+			}
+
+			origWriter.WriteHeader(status)
+			if len(body) > 0 {
+				_, _ = origWriter.Write(body)
+			}
+			return nil
 		}
 	}
 }

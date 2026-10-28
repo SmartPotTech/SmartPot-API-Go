@@ -27,7 +27,7 @@ func New(logger *slog.Logger) *echo.Echo {
 	}
 
 	// Cadena de middlewares por composición de funciones lineales
-	e.Use(contextMiddleware(), requestLogger(logger), recovery(logger), securityHeaders())
+	e.Use(contextMiddleware(), requestLogger(logger), recovery(logger), securityHeaders(), etagMiddleware())
 
 	return e
 }
