@@ -54,9 +54,11 @@ func (s *TokenService) Issue(userID, email, role string) (IssuedToken, error) {
 
 // Claims son los datos que la API lee del token.
 type Claims struct {
-	UserID string
-	Email  string
-	Role   string
+	UserID    string
+	Email     string
+	Role      string
+	IssuedAt  time.Time
+	ExpiresAt time.Time
 }
 
 // Parse valida la firma, el algoritmo (HS256), el issuer y la expiración.
@@ -81,5 +83,18 @@ func (s *TokenService) Parse(tokenString string) (Claims, error) {
 	}
 	email, _ := claims[emailClaim].(string)
 	role, _ := claims[roleClaim].(string)
-	return Claims{UserID: sub, Email: email, Role: role}, nil
+	var iatTime, expTime time.Time
+	if iat, err := claims.GetIssuedAt(); err == nil && iat != nil {
+		iatTime = iat.UTC()
+	}
+	if exp, err := claims.GetExpirationTime(); err == nil && exp != nil {
+		expTime = exp.UTC()
+	}
+	return Claims{
+		UserID:    sub,
+		Email:     email,
+		Role:      role,
+		IssuedAt:  iatTime,
+		ExpiresAt: expTime,
+	}, nil
 }

@@ -3,22 +3,20 @@ package security
 import (
 	"strings"
 
+	"github.com/SmartPotTech/SmartPot-API-Go/internal/httpserver"
 	"github.com/SmartPotTech/SmartPot-API-Go/internal/platform/apperr"
 	"github.com/labstack/echo/v4"
 )
 
 const (
-	ctxUserID = "smartpot_user_id"
-	ctxEmail  = "smartpot_email"
-	ctxRole   = "smartpot_role"
-
 	// RoleAdmin y RoleUser son los roles de la cuenta.
 	RoleAdmin = "ADMIN"
 	RoleUser  = "USER"
 )
 
-// Guard devuelve el middleware que exige un token JWT válido. Distingue, como
-// la versión en Java, entre "no hay sesión" y "la sesión no es válida/expiró".
+// Guard devuelve el middleware que exige un token JWT válido e inyecta la
+// identidad y las credenciales verificadas en el RequestContext tipado en
+// tiempo de compilación (sin usar mapas de strings ni conversiones any).
 func (s *TokenService) Guard() echo.MiddlewareFunc {
 	return func(next echo.HandlerFunc) echo.HandlerFunc {
 		return func(c echo.Context) error {
@@ -30,10 +28,16 @@ func (s *TokenService) Guard() echo.MiddlewareFunc {
 			if err != nil {
 				return apperr.Unauthorized("Tu sesión no es válida o expiró. Inicia sesión de nuevo")
 			}
-			c.Set(ctxUserID, claims.UserID)
-			c.Set(ctxEmail, claims.Email)
-			c.Set(ctxRole, claims.Role)
-			return next(c)
+			rc := httpserver.FromContext(c)
+			rc.SetIdentity(httpserver.Identity{
+				UserID:        claims.UserID,
+				Email:         claims.Email,
+				Role:          claims.Role,
+				IssuedAt:      claims.IssuedAt,
+				ExpiresAt:     claims.ExpiresAt,
+				Authenticated: true,
+			})
+			return next(rc)
 		}
 	}
 }
@@ -50,20 +54,22 @@ func RequireRole(role string) echo.MiddlewareFunc {
 	}
 }
 
+// CurrentIdentity devuelve la estructura tipada con la identidad y credenciales JWT del usuario.
+func CurrentIdentity(c echo.Context) httpserver.Identity {
+	return httpserver.FromContext(c).Identity()
+}
+
 // CurrentUserID devuelve el id del usuario autenticado (vacío si no hay).
-func CurrentUserID(c echo.Context) string { return stringValue(c, ctxUserID) }
+func CurrentUserID(c echo.Context) string {
+	return httpserver.FromContext(c).UserID()
+}
 
 // CurrentEmail devuelve el correo del usuario autenticado.
-func CurrentEmail(c echo.Context) string { return stringValue(c, ctxEmail) }
+func CurrentEmail(c echo.Context) string {
+	return httpserver.FromContext(c).Email()
+}
 
 // CurrentRole devuelve el rol del usuario autenticado.
-func CurrentRole(c echo.Context) string { return stringValue(c, ctxRole) }
-
-func stringValue(c echo.Context, key string) string {
-	if v := c.Get(key); v != nil {
-		if s, ok := v.(string); ok {
-			return s
-		}
-	}
-	return ""
+func CurrentRole(c echo.Context) string {
+	return httpserver.FromContext(c).Role()
 }

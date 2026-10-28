@@ -17,7 +17,16 @@ func TestGuard(t *testing.T) {
 	e := httpserver.New(discardLogger())
 	grp := e.Group("/api/v1")
 	grp.Use(svc.Guard())
-	grp.GET("/me", func(c echo.Context) error { return c.String(http.StatusOK, CurrentUserID(c)) })
+	grp.GET("/me", func(c echo.Context) error {
+		id := CurrentIdentity(c)
+		if !id.Authenticated || id.Email != "a@b.com" || id.Role != RoleUser || id.ExpiresAt.IsZero() {
+			t.Errorf("identidad tipada incompleta: %+v", id)
+		}
+		return c.String(http.StatusOK, CurrentUserID(c))
+	})
+	grp.GET("/admin", func(c echo.Context) error {
+		return c.String(http.StatusOK, "admin")
+	}, RequireRole(RoleAdmin))
 
 	send := func(authHeader string) *httptest.ResponseRecorder {
 		rec := httptest.NewRecorder()

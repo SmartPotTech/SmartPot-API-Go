@@ -28,6 +28,23 @@ func Unauthorized(message string) *Error { return New(http.StatusUnauthorized, m
 func Forbidden(message string) *Error    { return New(http.StatusForbidden, message) }
 func Unavailable(message string) *Error  { return New(http.StatusServiceUnavailable, message) }
 
+// ValidationError representa un fallo de validación de campos de entrada (400)
+// que viaja como error tipado hasta el HTTPErrorHandler centralizado.
+type ValidationError struct {
+	Message string
+	Fields  map[string]string
+}
+
+func (e *ValidationError) Error() string { return e.Message }
+
+// Validation construye un error de validación 400 con el detalle por campo.
+func Validation(fields map[string]string) *ValidationError {
+	return &ValidationError{
+		Message: "Revisa los datos enviados",
+		Fields:  fields,
+	}
+}
+
 // Response es el cuerpo JSON de un error. Jackson omite los campos vacíos
 // (NON_EMPTY): aquí se replica con omitempty en path y fields.
 type Response struct {

@@ -11,21 +11,32 @@ import (
 	"github.com/labstack/echo/v4"
 )
 
-// requestLogger registra cada petición con su método, ruta, estado y latencia.
+// requestLogger registra cada petición con su método, ruta, estado, latencia y
+// traza de telemetría a partir del RequestContext tipado. Si el manejador
+// devuelve un error explícito, delega primero en el HTTPErrorHandler centralizado
+// para garantizar que el código de estado final quede fijado antes del registro.
 func requestLogger(logger *slog.Logger) echo.MiddlewareFunc {
 	return func(next echo.HandlerFunc) echo.HandlerFunc {
 		return func(c echo.Context) error {
-			start := time.Now()
+			rc := FromContext(c)
+			start := rc.Trace().StartedAt
+			if start.IsZero() {
+				start = time.Now()
+			}
 			err := next(c)
+			if err != nil {
+				c.Error(err)
+			}
 			req := c.Request()
 			res := c.Response()
 			logger.Info("peticion",
+				"requestId", rc.Trace().RequestID,
 				"method", req.Method,
 				"path", req.URL.Path,
 				"status", res.Status,
 				"ms", time.Since(start).Milliseconds(),
 			)
-			return err
+			return nil
 		}
 	}
 }
@@ -37,8 +48,13 @@ func recovery(logger *slog.Logger) echo.MiddlewareFunc {
 			defer func() {
 				if r := recover(); r != nil {
 					req := c.Request()
+					rc := FromContext(c)
 					logger.Error("panico no controlado",
-						"method", req.Method, "path", req.URL.Path, "panic", r)
+						"requestId", rc.Trace().RequestID,
+						"method", req.Method,
+						"path", req.URL.Path,
+						"panic", r,
+					)
 					if !c.Response().Committed {
 						writeError(c, http.StatusInternalServerError,
 							"Ocurrió un error inesperado. Intenta de nuevo más tarde")
@@ -62,10 +78,18 @@ func securityHeaders() echo.MiddlewareFunc {
 	}
 }
 
-// RespondError escribe el error como respuesta JSON con su código HTTP. Un
-// *apperr.Error conserva su código y mensaje; cualquier otro error es un 500.
+// RespondError es el HTTPErrorHandler centralizado: transforma errores de
+// validación (*apperr.ValidationError), errores de dominio (*apperr.Error) y
+// errores de protocolo (*echo.HTTPError) en respuestas HTTP homogéneas sin
+// riesgo de escrituras duplicadas ni ejecuciones residuales.
 func RespondError(c echo.Context, err error) {
-	if c.Response().Committed {
+	if err == nil || c.Response().Committed {
+		return
+	}
+	var valErr *apperr.ValidationError
+	if errors.As(err, &valErr) {
+		_ = c.JSON(http.StatusBadRequest,
+			apperr.NewValidationResponse(valErr.Message, c.Request().URL.Path, valErr.Fields))
 		return
 	}
 	var apiErr *apperr.Error

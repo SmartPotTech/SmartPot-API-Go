@@ -18,12 +18,16 @@ func New(logger *slog.Logger) *echo.Echo {
 	// Extractor seguro de IP confiando en X-Forwarded-For de redes internas
 	e.IPExtractor = echo.ExtractIPFromXFFHeader()
 
-	// Manejador centralizado de errores: formatea cualquier error o falla HTTP al esquema común apperr.Response
+	// Validador intercambiable desacoplado de bibliotecas externas de etiquetas
+	e.Validator = NewValidator()
+
+	// Manejador centralizado de errores: transforma errores de dominio, validación y HTTP en respuestas homogéneas
 	e.HTTPErrorHandler = func(err error, c echo.Context) {
 		RespondError(c, err)
 	}
 
-	e.Use(requestLogger(logger), recovery(logger), securityHeaders())
+	// Cadena de middlewares por composición de funciones lineales
+	e.Use(contextMiddleware(), requestLogger(logger), recovery(logger), securityHeaders())
 
 	return e
 }
