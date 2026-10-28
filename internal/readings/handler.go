@@ -9,7 +9,7 @@ import (
 	"github.com/SmartPotTech/SmartPot-API-Go/internal/httpserver"
 	"github.com/SmartPotTech/SmartPot-API-Go/internal/platform/apperr"
 	"github.com/SmartPotTech/SmartPot-API-Go/internal/security"
-	"github.com/gin-gonic/gin"
+	"github.com/labstack/echo/v4"
 )
 
 // Handler expone las rutas de lecturas de un cultivo.
@@ -23,7 +23,7 @@ func NewHandler(svc *Service) *Handler {
 }
 
 // Register monta las rutas bajo el grupo autenticado /api/v1.
-func (h *Handler) Register(g *gin.RouterGroup) {
+func (h *Handler) Register(g *echo.Group) {
 	g.GET("/crops/:cropId/readings", h.list)
 	g.GET("/crops/:cropId/readings/latest", h.latest)
 	g.GET("/crops/:cropId/readings/summary", h.summary)
@@ -31,101 +31,101 @@ func (h *Handler) Register(g *gin.RouterGroup) {
 	g.POST("/crops/:cropId/readings", h.create)
 }
 
-func (h *Handler) list(c *gin.Context) {
+func (h *Handler) list(c echo.Context) error {
 	from, ok := queryTime(c, "from")
 	if !ok {
 		httpserver.RespondError(c, apperr.BadRequest("Parámetro inválido o faltante"))
-		return
+		return nil
 	}
 	to, ok := queryTime(c, "to")
 	if !ok {
 		httpserver.RespondError(c, apperr.BadRequest("Parámetro inválido o faltante"))
-		return
+		return nil
 	}
 	limit, ok := queryIntPtr(c, "limit")
 	if !ok {
 		httpserver.RespondError(c, apperr.BadRequest("Parámetro inválido o faltante"))
-		return
+		return nil
 	}
-	items, err := h.svc.List(c.Request.Context(), security.CurrentUserID(c), c.Param("cropId"), from, to, limit)
+	items, err := h.svc.List(c.Request().Context(), security.CurrentUserID(c), c.Param("cropId"), from, to, limit)
 	if err != nil {
 		httpserver.RespondError(c, err)
-		return
+		return nil
 	}
 	out := make([]*ReadingResponse, 0, len(items))
 	for i := range items {
 		out = append(out, ToResponse(&items[i]))
 	}
-	c.JSON(http.StatusOK, out)
+	return c.JSON(http.StatusOK, out)
 }
 
-func (h *Handler) latest(c *gin.Context) {
-	reading, err := h.svc.LatestOwned(c.Request.Context(), security.CurrentUserID(c), c.Param("cropId"))
+func (h *Handler) latest(c echo.Context) error {
+	reading, err := h.svc.LatestOwned(c.Request().Context(), security.CurrentUserID(c), c.Param("cropId"))
 	if err != nil {
 		httpserver.RespondError(c, err)
-		return
+		return nil
 	}
 	if reading == nil {
 		httpserver.RespondError(c, apperr.NotFound("El cultivo todavía no tiene lecturas"))
-		return
+		return nil
 	}
-	c.JSON(http.StatusOK, ToResponse(reading))
+	return c.JSON(http.StatusOK, ToResponse(reading))
 }
 
-func (h *Handler) summary(c *gin.Context) {
+func (h *Handler) summary(c echo.Context) error {
 	hours := 24
-	if raw := c.Query("hours"); raw != "" {
+	if raw := c.QueryParam("hours"); raw != "" {
 		n, err := strconv.Atoi(raw)
 		if err != nil {
 			httpserver.RespondError(c, apperr.BadRequest("Parámetro inválido o faltante"))
-			return
+			return nil
 		}
 		hours = n
 	}
-	res, err := h.svc.Summary(c.Request.Context(), security.CurrentUserID(c), c.Param("cropId"), hours)
+	res, err := h.svc.Summary(c.Request().Context(), security.CurrentUserID(c), c.Param("cropId"), hours)
 	if err != nil {
 		httpserver.RespondError(c, err)
-		return
+		return nil
 	}
-	c.JSON(http.StatusOK, res)
+	return c.JSON(http.StatusOK, res)
 }
 
-func (h *Handler) export(c *gin.Context) {
+func (h *Handler) export(c echo.Context) error {
 	from, ok := queryTime(c, "from")
 	if !ok {
 		httpserver.RespondError(c, apperr.BadRequest("Parámetro inválido o faltante"))
-		return
+		return nil
 	}
 	to, ok := queryTime(c, "to")
 	if !ok {
 		httpserver.RespondError(c, apperr.BadRequest("Parámetro inválido o faltante"))
-		return
+		return nil
 	}
 	cropID := c.Param("cropId")
-	csv, err := h.svc.ExportCSV(c.Request.Context(), security.CurrentUserID(c), cropID, from, to)
+	csv, err := h.svc.ExportCSV(c.Request().Context(), security.CurrentUserID(c), cropID, from, to)
 	if err != nil {
 		httpserver.RespondError(c, err)
-		return
+		return nil
 	}
-	c.Header("Content-Disposition", fmt.Sprintf("attachment; filename=\"smartpot-%s.csv\"", cropID))
-	c.Data(http.StatusOK, "text/csv; charset=utf-8", []byte(csv))
+	c.Response().Header().Set("Content-Disposition", fmt.Sprintf("attachment; filename=\"smartpot-%s.csv\"", cropID))
+	return c.Blob(http.StatusOK, "text/csv; charset=utf-8", []byte(csv))
 }
 
-func (h *Handler) create(c *gin.Context) {
+func (h *Handler) create(c echo.Context) error {
 	var req MeasuresRequest
 	if !httpserver.DecodeJSON(c, &req) {
-		return
+		return nil
 	}
-	reading, err := h.svc.RecordManual(c.Request.Context(), security.CurrentUserID(c), c.Param("cropId"), req.ToMeasures())
+	reading, err := h.svc.RecordManual(c.Request().Context(), security.CurrentUserID(c), c.Param("cropId"), req.ToMeasures())
 	if err != nil {
 		httpserver.RespondError(c, err)
-		return
+		return nil
 	}
-	c.JSON(http.StatusCreated, ToResponse(reading))
+	return c.JSON(http.StatusCreated, ToResponse(reading))
 }
 
-func queryTime(c *gin.Context, key string) (*time.Time, bool) {
-	raw := c.Query(key)
+func queryTime(c echo.Context, key string) (*time.Time, bool) {
+	raw := c.QueryParam(key)
 	if raw == "" {
 		return nil, true
 	}
@@ -136,8 +136,8 @@ func queryTime(c *gin.Context, key string) (*time.Time, bool) {
 	return &t, true
 }
 
-func queryIntPtr(c *gin.Context, key string) (*int, bool) {
-	raw := c.Query(key)
+func queryIntPtr(c echo.Context, key string) (*int, bool) {
+	raw := c.QueryParam(key)
 	if raw == "" {
 		return nil, true
 	}

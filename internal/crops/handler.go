@@ -10,7 +10,7 @@ import (
 	"github.com/SmartPotTech/SmartPot-API-Go/internal/readings"
 	"github.com/SmartPotTech/SmartPot-API-Go/internal/security"
 	"github.com/SmartPotTech/SmartPot-API-Go/internal/virtualdevices"
-	"github.com/gin-gonic/gin"
+	"github.com/labstack/echo/v4"
 )
 
 // VirtualDeviceManager arranca y valida la simulación de los cultivos virtuales
@@ -34,7 +34,7 @@ func NewHandler(crops *Service, readingsSvc *readings.Service, virtual VirtualDe
 }
 
 // Register monta las rutas bajo el grupo autenticado /api/v1.
-func (h *Handler) Register(g *gin.RouterGroup) {
+func (h *Handler) Register(g *echo.Group) {
 	g.GET("/crops", h.list)
 	g.POST("/crops", h.create)
 	g.PUT("/crops/automation", h.bulkAutomation)
@@ -47,139 +47,138 @@ func (h *Handler) Register(g *gin.RouterGroup) {
 	g.POST("/crops/:cropId/device/key", h.rotateKey)
 }
 
-func (h *Handler) list(c *gin.Context) {
-	crops, err := h.crops.List(c.Request.Context(), security.CurrentUserID(c))
+func (h *Handler) list(c echo.Context) error {
+	crops, err := h.crops.List(c.Request().Context(), security.CurrentUserID(c))
 	if err != nil {
 		httpserver.RespondError(c, err)
-		return
+		return nil
 	}
 	out := make([]CropResponse, 0, len(crops))
 	for i := range crops {
-		out = append(out, h.toResponse(c.Request.Context(), &crops[i]))
+		out = append(out, h.toResponse(c.Request().Context(), &crops[i]))
 	}
-	c.JSON(http.StatusOK, out)
+	return c.JSON(http.StatusOK, out)
 }
 
-func (h *Handler) create(c *gin.Context) {
+func (h *Handler) create(c echo.Context) error {
 	var req CropRequest
 	if !httpserver.Bind(c, &req) {
-		return
+		return nil
 	}
 	ownerID := security.CurrentUserID(c)
 	virtual := req.Kind != nil && *req.Kind == KindVirtual
 	if virtual {
-		if err := h.virtual.CheckCanCreate(c.Request.Context(), ownerID, req.Virtual, req.Placement.ToPlacement()); err != nil {
+		if err := h.virtual.CheckCanCreate(c.Request().Context(), ownerID, req.Virtual, req.Placement.ToPlacement()); err != nil {
 			httpserver.RespondError(c, err)
-			return
+			return nil
 		}
 	} else if req.Virtual != nil {
 		httpserver.RespondError(c, apperr.BadRequest("Solo los cultivos virtuales tienen simulación"))
-		return
+		return nil
 	}
-	created, err := h.crops.Create(c.Request.Context(), ownerID, req)
+	created, err := h.crops.Create(c.Request().Context(), ownerID, req)
 	if err != nil {
 		httpserver.RespondError(c, err)
-		return
+		return nil
 	}
 	if virtual {
-		if err := h.virtual.StartFor(c.Request.Context(), created.Crop.HexID(), req.Virtual); err != nil {
+		if err := h.virtual.StartFor(c.Request().Context(), created.Crop.HexID(), req.Virtual); err != nil {
 			httpserver.RespondError(c, err)
-			return
+			return nil
 		}
 	}
-	c.JSON(http.StatusCreated, CropCreatedResponse{Crop: ToResponse(created.Crop, nil), Device: created.Credentials})
+	return c.JSON(http.StatusCreated, CropCreatedResponse{Crop: ToResponse(created.Crop, nil), Device: created.Credentials})
 }
 
-func (h *Handler) get(c *gin.Context) {
-	crop, err := h.crops.GetOwned(c.Request.Context(), security.CurrentUserID(c), c.Param("cropId"))
+func (h *Handler) get(c echo.Context) error {
+	crop, err := h.crops.GetOwned(c.Request().Context(), security.CurrentUserID(c), c.Param("cropId"))
 	if err != nil {
 		httpserver.RespondError(c, err)
-		return
+		return nil
 	}
-	c.JSON(http.StatusOK, h.toResponse(c.Request.Context(), crop))
+	return c.JSON(http.StatusOK, h.toResponse(c.Request().Context(), crop))
 }
 
-func (h *Handler) update(c *gin.Context) {
+func (h *Handler) update(c echo.Context) error {
 	var req CropRequest
 	if !httpserver.Bind(c, &req) {
-		return
+		return nil
 	}
-	crop, err := h.crops.Update(c.Request.Context(), security.CurrentUserID(c), c.Param("cropId"), req)
+	crop, err := h.crops.Update(c.Request().Context(), security.CurrentUserID(c), c.Param("cropId"), req)
 	if err != nil {
 		httpserver.RespondError(c, err)
-		return
+		return nil
 	}
-	c.JSON(http.StatusOK, h.toResponse(c.Request.Context(), crop))
+	return c.JSON(http.StatusOK, h.toResponse(c.Request().Context(), crop))
 }
 
-func (h *Handler) delete(c *gin.Context) {
-	if err := h.crops.Delete(c.Request.Context(), security.CurrentUserID(c), c.Param("cropId")); err != nil {
+func (h *Handler) delete(c echo.Context) error {
+	if err := h.crops.Delete(c.Request().Context(), security.CurrentUserID(c), c.Param("cropId")); err != nil {
 		httpserver.RespondError(c, err)
-		return
+		return nil
 	}
-	c.Status(http.StatusNoContent)
+	return c.NoContent(http.StatusNoContent)
 }
 
-func (h *Handler) bulkAutomation(c *gin.Context) {
+func (h *Handler) bulkAutomation(c echo.Context) error {
 	var req BulkAutomationRequest
 	if !httpserver.Bind(c, &req) {
-		return
+		return nil
 	}
-	crops, err := h.crops.SetAutomationBulk(c.Request.Context(), security.CurrentUserID(c), req.CropIds, *req.Enabled)
+	crops, err := h.crops.SetAutomationBulk(c.Request().Context(), security.CurrentUserID(c), req.CropIds, *req.Enabled)
 	if err != nil {
 		httpserver.RespondError(c, err)
-		return
+		return nil
 	}
 	out := make([]CropResponse, 0, len(crops))
 	for i := range crops {
-		out = append(out, h.toResponse(c.Request.Context(), &crops[i]))
+		out = append(out, h.toResponse(c.Request().Context(), &crops[i]))
 	}
-	c.JSON(http.StatusOK, out)
+	return c.JSON(http.StatusOK, out)
 }
 
-func (h *Handler) automation(c *gin.Context) {
+func (h *Handler) automation(c echo.Context) error {
 	var req AutomationRequest
 	if !httpserver.Bind(c, &req) {
-		return
+		return nil
 	}
-	crop, err := h.crops.SetAutomation(c.Request.Context(), security.CurrentUserID(c), c.Param("cropId"), *req.Enabled)
+	crop, err := h.crops.SetAutomation(c.Request().Context(), security.CurrentUserID(c), c.Param("cropId"), *req.Enabled)
 	if err != nil {
 		httpserver.RespondError(c, err)
-		return
+		return nil
 	}
-	c.JSON(http.StatusOK, h.toResponse(c.Request.Context(), crop))
+	return c.JSON(http.StatusOK, h.toResponse(c.Request().Context(), crop))
 }
 
-func (h *Handler) weatherOf(c *gin.Context) {
-	crop, err := h.crops.GetOwned(c.Request.Context(), security.CurrentUserID(c), c.Param("cropId"))
+func (h *Handler) weatherOf(c echo.Context) error {
+	crop, err := h.crops.GetOwned(c.Request().Context(), security.CurrentUserID(c), c.Param("cropId"))
 	if err != nil {
 		httpserver.RespondError(c, err)
-		return
+		return nil
 	}
-	weather, ok := h.weather.Current(c.Request.Context(), crop)
+	weather, ok := h.weather.Current(c.Request().Context(), crop)
 	if !ok {
-		c.Status(http.StatusNoContent)
-		return
+		return c.NoContent(http.StatusNoContent)
 	}
-	c.JSON(http.StatusOK, weather)
+	return c.JSON(http.StatusOK, weather)
 }
 
-func (h *Handler) device(c *gin.Context) {
-	creds, err := h.crops.DeviceInfo(c.Request.Context(), security.CurrentUserID(c), c.Param("cropId"))
+func (h *Handler) device(c echo.Context) error {
+	creds, err := h.crops.DeviceInfo(c.Request().Context(), security.CurrentUserID(c), c.Param("cropId"))
 	if err != nil {
 		httpserver.RespondError(c, err)
-		return
+		return nil
 	}
-	c.JSON(http.StatusOK, creds)
+	return c.JSON(http.StatusOK, creds)
 }
 
-func (h *Handler) rotateKey(c *gin.Context) {
-	creds, err := h.crops.RotateDeviceKey(c.Request.Context(), security.CurrentUserID(c), c.Param("cropId"))
+func (h *Handler) rotateKey(c echo.Context) error {
+	creds, err := h.crops.RotateDeviceKey(c.Request().Context(), security.CurrentUserID(c), c.Param("cropId"))
 	if err != nil {
 		httpserver.RespondError(c, err)
-		return
+		return nil
 	}
-	c.JSON(http.StatusOK, creds)
+	return c.JSON(http.StatusOK, creds)
 }
 
 func (h *Handler) toResponse(ctx context.Context, crop *Crop) CropResponse {

@@ -6,7 +6,7 @@ import (
 
 	"github.com/SmartPotTech/SmartPot-API-Go/internal/httpserver"
 	"github.com/SmartPotTech/SmartPot-API-Go/internal/security"
-	"github.com/gin-gonic/gin"
+	"github.com/labstack/echo/v4"
 )
 
 // Handler expone las rutas de actuadores de un cultivo.
@@ -21,43 +21,43 @@ func NewHandler(svc *Service, clock func() time.Time) *Handler {
 }
 
 // Register monta las rutas bajo el grupo autenticado /api/v1.
-func (h *Handler) Register(g *gin.RouterGroup) {
+func (h *Handler) Register(g *echo.Group) {
 	g.GET("/crops/:cropId/actuators", h.list)
 	g.POST("/crops/:cropId/actuators", h.add)
 	g.DELETE("/crops/:cropId/actuators/:actuatorId", h.remove)
 }
 
-func (h *Handler) list(c *gin.Context) {
-	items, err := h.svc.List(c.Request.Context(), security.CurrentUserID(c), c.Param("cropId"))
+func (h *Handler) list(c echo.Context) error {
+	items, err := h.svc.List(c.Request().Context(), security.CurrentUserID(c), c.Param("cropId"))
 	if err != nil {
 		httpserver.RespondError(c, err)
-		return
+		return nil
 	}
 	now := h.clock()
 	out := make([]ActuatorResponse, 0, len(items))
 	for i := range items {
 		out = append(out, ToResponse(&items[i], now))
 	}
-	c.JSON(http.StatusOK, out)
+	return c.JSON(http.StatusOK, out)
 }
 
-func (h *Handler) add(c *gin.Context) {
+func (h *Handler) add(c echo.Context) error {
 	var req ActuatorRequest
 	if !httpserver.Bind(c, &req) {
-		return
+		return nil
 	}
-	a, err := h.svc.Add(c.Request.Context(), security.CurrentUserID(c), c.Param("cropId"), *req.Type)
+	a, err := h.svc.Add(c.Request().Context(), security.CurrentUserID(c), c.Param("cropId"), *req.Type)
 	if err != nil {
 		httpserver.RespondError(c, err)
-		return
+		return nil
 	}
-	c.JSON(http.StatusCreated, ToResponse(a, h.clock()))
+	return c.JSON(http.StatusCreated, ToResponse(a, h.clock()))
 }
 
-func (h *Handler) remove(c *gin.Context) {
-	if err := h.svc.Remove(c.Request.Context(), security.CurrentUserID(c), c.Param("cropId"), c.Param("actuatorId")); err != nil {
+func (h *Handler) remove(c echo.Context) error {
+	if err := h.svc.Remove(c.Request().Context(), security.CurrentUserID(c), c.Param("cropId"), c.Param("actuatorId")); err != nil {
 		httpserver.RespondError(c, err)
-		return
+		return nil
 	}
-	c.Status(http.StatusNoContent)
+	return c.NoContent(http.StatusNoContent)
 }
