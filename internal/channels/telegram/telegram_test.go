@@ -9,10 +9,8 @@ import (
 	"github.com/SmartPotTech/SmartPot-API-Go/internal/channels"
 	"github.com/SmartPotTech/SmartPot-API-Go/internal/config"
 	"github.com/SmartPotTech/SmartPot-API-Go/internal/notifications"
-	"github.com/gin-gonic/gin"
+	"github.com/labstack/echo/v4"
 )
-
-func init() { gin.SetMode(gin.TestMode) }
 
 func TestEscape(t *testing.T) {
 	cases := map[string]string{
@@ -42,15 +40,15 @@ func TestFormat(t *testing.T) {
 }
 
 func serveWebhook(wc *WebhookController, secret, body string) int {
-	engine := gin.New()
-	wc.Register(engine.Group("/api/v1"))
+	e := echo.New()
+	wc.Register(e.Group("/api/v1"))
 	req := httptest.NewRequest(http.MethodPost, "/api/v1/channels/telegram/webhook", strings.NewReader(body))
 	req.Header.Set("Content-Type", "application/json")
 	if secret != "" {
 		req.Header.Set("X-Telegram-Bot-Api-Secret-Token", secret)
 	}
 	w := httptest.NewRecorder()
-	engine.ServeHTTP(w, req)
+	e.ServeHTTP(w, req)
 	return w.Code
 }
 

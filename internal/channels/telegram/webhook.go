@@ -6,7 +6,7 @@ import (
 	"net/http"
 
 	"github.com/SmartPotTech/SmartPot-API-Go/internal/config"
-	"github.com/gin-gonic/gin"
+	"github.com/labstack/echo/v4"
 )
 
 // WebhookController es la entrada pública de los mensajes del bot en modo
@@ -23,23 +23,21 @@ func NewWebhookController(cfg config.Telegram, listener *Listener) *WebhookContr
 }
 
 // Register monta la ruta pública del webhook bajo /api/v1.
-func (c *WebhookController) Register(g *gin.RouterGroup) {
+func (c *WebhookController) Register(g *echo.Group) {
 	g.POST("/channels/telegram/webhook", c.receive)
 }
 
-func (c *WebhookController) receive(ctx *gin.Context) {
-	secret := ctx.GetHeader("X-Telegram-Bot-Api-Secret-Token")
+func (c *WebhookController) receive(ctx echo.Context) error {
+	secret := ctx.Request().Header.Get("X-Telegram-Bot-Api-Secret-Token")
 	if !c.enabled() || c.cfg.Mode != "webhook" || !c.matches(secret) {
-		ctx.Status(http.StatusNotFound)
-		return
+		return ctx.NoContent(http.StatusNotFound)
 	}
 	var update Update
-	if err := json.NewDecoder(ctx.Request.Body).Decode(&update); err != nil {
-		ctx.Status(http.StatusBadRequest)
-		return
+	if err := json.NewDecoder(ctx.Request().Body).Decode(&update); err != nil {
+		return ctx.NoContent(http.StatusBadRequest)
 	}
 	c.listener.HandleSafely(update)
-	ctx.Status(http.StatusOK)
+	return ctx.NoContent(http.StatusOK)
 }
 
 func (c *WebhookController) enabled() bool {
