@@ -4,7 +4,6 @@ import (
 	"net/http"
 	"strconv"
 
-	"github.com/SmartPotTech/SmartPot-API-Go/internal/httpserver"
 	"github.com/SmartPotTech/SmartPot-API-Go/internal/platform/apperr"
 	"github.com/SmartPotTech/SmartPot-API-Go/internal/security"
 	"github.com/labstack/echo/v4"
@@ -30,8 +29,7 @@ func (h *Handler) Register(g *echo.Group) {
 func (h *Handler) overview(c echo.Context) error {
 	res, err := h.svc.Overview(c.Request().Context(), security.CurrentUserID(c))
 	if err != nil {
-		httpserver.RespondError(c, err)
-		return nil
+		return err
 	}
 	return c.JSON(http.StatusOK, res)
 }
@@ -45,15 +43,13 @@ func (h *Handler) series(c echo.Context) error {
 	if raw := c.QueryParam("hours"); raw != "" {
 		n, err := strconv.Atoi(raw)
 		if err != nil {
-			httpserver.RespondError(c, apperr.BadRequest("Parámetro inválido o faltante"))
-			return nil
+			return apperr.BadRequest("Parámetro inválido o faltante")
 		}
 		hours = n
 	}
 	res, err := h.svc.Series(c.Request().Context(), security.CurrentUserID(c), metric, hours)
 	if err != nil {
-		httpserver.RespondError(c, err)
-		return nil
+		return err
 	}
 	return c.JSON(http.StatusOK, res)
 }
@@ -61,8 +57,7 @@ func (h *Handler) series(c echo.Context) error {
 func (h *Handler) fleet(c echo.Context) error {
 	res, err := h.svc.Fleet(c.Request().Context(), security.CurrentUserID(c))
 	if err != nil {
-		httpserver.RespondError(c, err)
-		return nil
+		return err
 	}
 	return c.JSON(http.StatusOK, res)
 }

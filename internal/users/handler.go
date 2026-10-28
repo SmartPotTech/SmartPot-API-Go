@@ -29,41 +29,37 @@ func (h *Handler) Register(g *echo.Group) {
 func (h *Handler) me(c echo.Context) error {
 	u, err := h.svc.GetByID(c.Request().Context(), security.CurrentUserID(c))
 	if err != nil {
-		httpserver.RespondError(c, err)
-		return nil
+		return err
 	}
 	return c.JSON(http.StatusOK, ToResponse(u))
 }
 
 func (h *Handler) update(c echo.Context) error {
 	var req UpdateProfileRequest
-	if !httpserver.Bind(c, &req) {
-		return nil
+	if err := httpserver.Bind(c, &req); err != nil {
+		return err
 	}
 	u, err := h.svc.UpdateProfile(c.Request().Context(), security.CurrentUserID(c), req)
 	if err != nil {
-		httpserver.RespondError(c, err)
-		return nil
+		return err
 	}
 	return c.JSON(http.StatusOK, ToResponse(u))
 }
 
 func (h *Handler) changePassword(c echo.Context) error {
 	var req ChangePasswordRequest
-	if !httpserver.Bind(c, &req) {
-		return nil
+	if err := httpserver.Bind(c, &req); err != nil {
+		return err
 	}
 	if err := h.svc.ChangePassword(c.Request().Context(), security.CurrentUserID(c), req); err != nil {
-		httpserver.RespondError(c, err)
-		return nil
+		return err
 	}
 	return c.NoContent(http.StatusNoContent)
 }
 
 func (h *Handler) delete(c echo.Context) error {
 	if err := h.svc.DeleteAccount(c.Request().Context(), security.CurrentUserID(c)); err != nil {
-		httpserver.RespondError(c, err)
-		return nil
+		return err
 	}
 	return c.NoContent(http.StatusNoContent)
 }

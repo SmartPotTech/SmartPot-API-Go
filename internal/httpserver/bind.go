@@ -2,7 +2,6 @@ package httpserver
 
 import (
 	"encoding/json"
-	"net/http"
 
 	"github.com/SmartPotTech/SmartPot-API-Go/internal/platform/apperr"
 	"github.com/SmartPotTech/SmartPot-API-Go/internal/platform/validation"
@@ -36,29 +35,24 @@ func (Validator) Validate(i any) error {
 }
 
 // DecodeJSON decodifica el cuerpo JSON en dst sin validarlo. Si el JSON es
-// inválido responde 400 y devuelve false (el llamador debe detenerse).
-func DecodeJSON(c echo.Context, dst any) bool {
+// inválido devuelve un error de dominio 400 para el HTTPErrorHandler centralizado.
+func DecodeJSON(c echo.Context, dst any) error {
 	if err := json.NewDecoder(c.Request().Body).Decode(dst); err != nil {
-		writeError(c, http.StatusBadRequest, "El cuerpo de la solicitud no es un JSON válido")
-		return false
+		return apperr.BadRequest("El cuerpo de la solicitud no es un JSON válido")
 	}
-	return true
+	return nil
 }
 
-// Bind decodifica el cuerpo JSON en req y lo valida. Si el JSON es inválido
-// responde 400 con el mismo mensaje que la versión en Java; si falla la
-// validación responde 400 con el detalle por campo. Devuelve false si ya
-// respondió (el llamador debe detenerse).
-func Bind(c echo.Context, req Validatable) bool {
-	decoder := json.NewDecoder(c.Request().Body)
-	if err := decoder.Decode(req); err != nil {
-		writeError(c, http.StatusBadRequest, "El cuerpo de la solicitud no es un JSON válido")
-		return false
+// Bind decodifica el cuerpo JSON en req y lo valida a través de la interfaz
+// intercambiable echo.Validator configurada en el servidor. Devuelve un error
+// tipado (*apperr.Error o *apperr.ValidationError) que el manejador propaga con
+// return err hacia el HTTPErrorHandler centralizado.
+func Bind(c echo.Context, req any) error {
+	if err := DecodeJSON(c, req); err != nil {
+		return err
 	}
-	if fields := req.Validate(); len(fields) > 0 {
-		_ = c.JSON(http.StatusBadRequest,
-			apperr.NewValidationResponse("Revisa los datos enviados", c.Request().URL.Path, fields))
-		return false
+	if c.Echo() != nil && c.Echo().Validator != nil {
+		return c.Validate(req)
 	}
-	return true
+	return Validator{}.Validate(req)
 }

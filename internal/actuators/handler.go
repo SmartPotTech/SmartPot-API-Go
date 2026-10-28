@@ -30,8 +30,7 @@ func (h *Handler) Register(g *echo.Group) {
 func (h *Handler) list(c echo.Context) error {
 	items, err := h.svc.List(c.Request().Context(), security.CurrentUserID(c), c.Param("cropId"))
 	if err != nil {
-		httpserver.RespondError(c, err)
-		return nil
+		return err
 	}
 	now := h.clock()
 	out := make([]ActuatorResponse, 0, len(items))
@@ -43,21 +42,19 @@ func (h *Handler) list(c echo.Context) error {
 
 func (h *Handler) add(c echo.Context) error {
 	var req ActuatorRequest
-	if !httpserver.Bind(c, &req) {
-		return nil
+	if err := httpserver.Bind(c, &req); err != nil {
+		return err
 	}
 	a, err := h.svc.Add(c.Request().Context(), security.CurrentUserID(c), c.Param("cropId"), *req.Type)
 	if err != nil {
-		httpserver.RespondError(c, err)
-		return nil
+		return err
 	}
 	return c.JSON(http.StatusCreated, ToResponse(a, h.clock()))
 }
 
 func (h *Handler) remove(c echo.Context) error {
 	if err := h.svc.Remove(c.Request().Context(), security.CurrentUserID(c), c.Param("cropId"), c.Param("actuatorId")); err != nil {
-		httpserver.RespondError(c, err)
-		return nil
+		return err
 	}
 	return c.NoContent(http.StatusNoContent)
 }

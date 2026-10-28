@@ -34,23 +34,19 @@ func (h *Handler) Register(g *echo.Group) {
 func (h *Handler) list(c echo.Context) error {
 	from, ok := queryTime(c, "from")
 	if !ok {
-		httpserver.RespondError(c, apperr.BadRequest("Parámetro inválido o faltante"))
-		return nil
+		return apperr.BadRequest("Parámetro inválido o faltante")
 	}
 	to, ok := queryTime(c, "to")
 	if !ok {
-		httpserver.RespondError(c, apperr.BadRequest("Parámetro inválido o faltante"))
-		return nil
+		return apperr.BadRequest("Parámetro inválido o faltante")
 	}
 	limit, ok := queryIntPtr(c, "limit")
 	if !ok {
-		httpserver.RespondError(c, apperr.BadRequest("Parámetro inválido o faltante"))
-		return nil
+		return apperr.BadRequest("Parámetro inválido o faltante")
 	}
 	items, err := h.svc.List(c.Request().Context(), security.CurrentUserID(c), c.Param("cropId"), from, to, limit)
 	if err != nil {
-		httpserver.RespondError(c, err)
-		return nil
+		return err
 	}
 	out := make([]*ReadingResponse, 0, len(items))
 	for i := range items {
@@ -62,12 +58,10 @@ func (h *Handler) list(c echo.Context) error {
 func (h *Handler) latest(c echo.Context) error {
 	reading, err := h.svc.LatestOwned(c.Request().Context(), security.CurrentUserID(c), c.Param("cropId"))
 	if err != nil {
-		httpserver.RespondError(c, err)
-		return nil
+		return err
 	}
 	if reading == nil {
-		httpserver.RespondError(c, apperr.NotFound("El cultivo todavía no tiene lecturas"))
-		return nil
+		return apperr.NotFound("El cultivo todavía no tiene lecturas")
 	}
 	return c.JSON(http.StatusOK, ToResponse(reading))
 }
@@ -77,15 +71,13 @@ func (h *Handler) summary(c echo.Context) error {
 	if raw := c.QueryParam("hours"); raw != "" {
 		n, err := strconv.Atoi(raw)
 		if err != nil {
-			httpserver.RespondError(c, apperr.BadRequest("Parámetro inválido o faltante"))
-			return nil
+			return apperr.BadRequest("Parámetro inválido o faltante")
 		}
 		hours = n
 	}
 	res, err := h.svc.Summary(c.Request().Context(), security.CurrentUserID(c), c.Param("cropId"), hours)
 	if err != nil {
-		httpserver.RespondError(c, err)
-		return nil
+		return err
 	}
 	return c.JSON(http.StatusOK, res)
 }
@@ -93,19 +85,16 @@ func (h *Handler) summary(c echo.Context) error {
 func (h *Handler) export(c echo.Context) error {
 	from, ok := queryTime(c, "from")
 	if !ok {
-		httpserver.RespondError(c, apperr.BadRequest("Parámetro inválido o faltante"))
-		return nil
+		return apperr.BadRequest("Parámetro inválido o faltante")
 	}
 	to, ok := queryTime(c, "to")
 	if !ok {
-		httpserver.RespondError(c, apperr.BadRequest("Parámetro inválido o faltante"))
-		return nil
+		return apperr.BadRequest("Parámetro inválido o faltante")
 	}
 	cropID := c.Param("cropId")
 	csv, err := h.svc.ExportCSV(c.Request().Context(), security.CurrentUserID(c), cropID, from, to)
 	if err != nil {
-		httpserver.RespondError(c, err)
-		return nil
+		return err
 	}
 	c.Response().Header().Set("Content-Disposition", fmt.Sprintf("attachment; filename=\"smartpot-%s.csv\"", cropID))
 	return c.Blob(http.StatusOK, "text/csv; charset=utf-8", []byte(csv))
@@ -113,13 +102,12 @@ func (h *Handler) export(c echo.Context) error {
 
 func (h *Handler) create(c echo.Context) error {
 	var req MeasuresRequest
-	if !httpserver.DecodeJSON(c, &req) {
-		return nil
+	if err := httpserver.DecodeJSON(c, &req); err != nil {
+		return err
 	}
 	reading, err := h.svc.RecordManual(c.Request().Context(), security.CurrentUserID(c), c.Param("cropId"), req.ToMeasures())
 	if err != nil {
-		httpserver.RespondError(c, err)
-		return nil
+		return err
 	}
 	return c.JSON(http.StatusCreated, ToResponse(reading))
 }

@@ -28,50 +28,46 @@ func (h *Handler) Register(g *echo.Group) {
 
 func (h *Handler) register(c echo.Context) error {
 	var req RegisterRequest
-	if !httpserver.Bind(c, &req) {
-		return nil
+	if err := httpserver.Bind(c, &req); err != nil {
+		return err
 	}
 	resp, err := h.svc.Register(c.Request().Context(), req)
 	if err != nil {
-		httpserver.RespondError(c, err)
-		return nil
+		return err
 	}
 	return c.JSON(http.StatusCreated, resp)
 }
 
 func (h *Handler) login(c echo.Context) error {
 	var req LoginRequest
-	if !httpserver.Bind(c, &req) {
-		return nil
+	if err := httpserver.Bind(c, &req); err != nil {
+		return err
 	}
 	resp, err := h.svc.Login(c.Request().Context(), req)
 	if err != nil {
-		httpserver.RespondError(c, err)
-		return nil
+		return err
 	}
 	return c.JSON(http.StatusOK, resp)
 }
 
 func (h *Handler) forgot(c echo.Context) error {
 	var req ForgotPasswordRequest
-	if !httpserver.Bind(c, &req) {
-		return nil
+	if err := httpserver.Bind(c, &req); err != nil {
+		return err
 	}
 	if err := h.svc.RequestPasswordReset(c.Request().Context(), req.Email); err != nil {
-		httpserver.RespondError(c, err)
-		return nil
+		return err
 	}
 	return c.NoContent(http.StatusAccepted)
 }
 
 func (h *Handler) reset(c echo.Context) error {
 	var req ResetPasswordRequest
-	if !httpserver.Bind(c, &req) {
-		return nil
+	if err := httpserver.Bind(c, &req); err != nil {
+		return err
 	}
 	if err := h.svc.ResetPassword(c.Request().Context(), req); err != nil {
-		httpserver.RespondError(c, err)
-		return nil
+		return err
 	}
 	return c.NoContent(http.StatusNoContent)
 }

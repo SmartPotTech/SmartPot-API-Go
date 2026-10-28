@@ -3,7 +3,6 @@ package ai
 import (
 	"net/http"
 
-	"github.com/SmartPotTech/SmartPot-API-Go/internal/httpserver"
 	"github.com/SmartPotTech/SmartPot-API-Go/internal/security"
 	"github.com/labstack/echo/v4"
 )
@@ -33,8 +32,7 @@ func (h *Handler) RegisterPublic(g *echo.Group) {
 func (h *Handler) insightsOf(c echo.Context) error {
 	resp, err := h.insights.ForOwner(c.Request().Context(), security.CurrentUserID(c), c.Param("cropId"))
 	if err != nil {
-		httpserver.RespondError(c, err)
-		return nil
+		return err
 	}
 	return c.JSON(http.StatusOK, resp)
 }
@@ -42,8 +40,7 @@ func (h *Handler) insightsOf(c echo.Context) error {
 func (h *Handler) learning(c echo.Context) error {
 	body, err := h.client.LearningStatusJSON(c.Request().Context())
 	if err != nil {
-		httpserver.RespondError(c, err)
-		return nil
+		return err
 	}
 	c.Response().Header().Set("Cache-Control", "private, max-age=60")
 	return c.Blob(http.StatusOK, "application/json; charset=utf-8", []byte(body))
@@ -52,8 +49,7 @@ func (h *Handler) learning(c echo.Context) error {
 func (h *Handler) cropProfiles(c echo.Context) error {
 	body, err := h.client.CropProfilesJSON(c.Request().Context())
 	if err != nil {
-		httpserver.RespondError(c, err)
-		return nil
+		return err
 	}
 	c.Response().Header().Set("Cache-Control", "public, max-age=3600")
 	return c.Blob(http.StatusOK, "application/json; charset=utf-8", []byte(body))

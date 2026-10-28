@@ -30,29 +30,26 @@ func (h *Handler) Register(g *echo.Group) {
 func (h *Handler) get(c echo.Context) error {
 	res, err := h.svc.Get(c.Request().Context(), security.CurrentUserID(c), c.Param("cropId"))
 	if err != nil {
-		httpserver.RespondError(c, err)
-		return nil
+		return err
 	}
 	return c.JSON(http.StatusOK, res)
 }
 
 func (h *Handler) configure(c echo.Context) error {
 	var req VirtualDeviceRequest
-	if !httpserver.Bind(c, &req) {
-		return nil
+	if err := httpserver.Bind(c, &req); err != nil {
+		return err
 	}
 	res, err := h.svc.Configure(c.Request().Context(), security.CurrentUserID(c), c.Param("cropId"), req)
 	if err != nil {
-		httpserver.RespondError(c, err)
-		return nil
+		return err
 	}
 	return c.JSON(http.StatusOK, res)
 }
 
 func (h *Handler) pause(c echo.Context) error {
 	if err := h.svc.Pause(c.Request().Context(), security.CurrentUserID(c), c.Param("cropId")); err != nil {
-		httpserver.RespondError(c, err)
-		return nil
+		return err
 	}
 	return c.NoContent(http.StatusNoContent)
 }
@@ -60,13 +57,11 @@ func (h *Handler) pause(c echo.Context) error {
 func (h *Handler) places(c echo.Context) error {
 	query := c.QueryParam("q")
 	if query == "" {
-		httpserver.RespondError(c, apperr.BadRequest("Parámetro inválido o faltante"))
-		return nil
+		return apperr.BadRequest("Parámetro inválido o faltante")
 	}
 	places, err := h.svc.Places(c.Request().Context(), query)
 	if err != nil {
-		httpserver.RespondError(c, err)
-		return nil
+		return err
 	}
 	return c.JSON(http.StatusOK, places)
 }

@@ -38,8 +38,7 @@ func (h *Handler) Register(g *echo.Group) {
 func (h *Handler) overview(c echo.Context) error {
 	out, err := h.channels.Overview(c.Request().Context(), security.CurrentUserID(c))
 	if err != nil {
-		httpserver.RespondError(c, err)
-		return nil
+		return err
 	}
 	return c.JSON(http.StatusOK, out)
 }
@@ -47,42 +46,37 @@ func (h *Handler) overview(c echo.Context) error {
 func (h *Handler) linkCode(c echo.Context) error {
 	t, err := parseType(c.Param("type"))
 	if err != nil {
-		httpserver.RespondError(c, err)
-		return nil
+		return err
 	}
 	res, err := h.channels.CreateLinkCode(c.Request().Context(), security.CurrentUserID(c), t)
 	if err != nil {
-		httpserver.RespondError(c, err)
-		return nil
+		return err
 	}
 	return c.JSON(http.StatusOK, res)
 }
 
 func (h *Handler) updateLink(c echo.Context) error {
 	var req ChannelLinkUpdateRequest
-	if !httpserver.Bind(c, &req) {
-		return nil
+	if err := httpserver.Bind(c, &req); err != nil {
+		return err
 	}
 	res, err := h.channels.Update(c.Request().Context(), security.CurrentUserID(c), c.Param("id"), req)
 	if err != nil {
-		httpserver.RespondError(c, err)
-		return nil
+		return err
 	}
 	return c.JSON(http.StatusOK, res)
 }
 
 func (h *Handler) test(c echo.Context) error {
 	if err := h.channels.SendTest(c.Request().Context(), security.CurrentUserID(c), c.Param("id")); err != nil {
-		httpserver.RespondError(c, err)
-		return nil
+		return err
 	}
 	return c.NoContent(http.StatusNoContent)
 }
 
 func (h *Handler) unlink(c echo.Context) error {
 	if err := h.channels.Unlink(c.Request().Context(), security.CurrentUserID(c), c.Param("id")); err != nil {
-		httpserver.RespondError(c, err)
-		return nil
+		return err
 	}
 	return c.NoContent(http.StatusNoContent)
 }
@@ -90,8 +84,7 @@ func (h *Handler) unlink(c echo.Context) error {
 func (h *Handler) cropList(c echo.Context) error {
 	out, err := h.cropChannels.List(c.Request().Context(), security.CurrentUserID(c), c.Param("cropId"))
 	if err != nil {
-		httpserver.RespondError(c, err)
-		return nil
+		return err
 	}
 	return c.JSON(http.StatusOK, out)
 }
@@ -99,17 +92,15 @@ func (h *Handler) cropList(c echo.Context) error {
 func (h *Handler) cropUpdate(c echo.Context) error {
 	t, err := parseType(c.Param("type"))
 	if err != nil {
-		httpserver.RespondError(c, err)
-		return nil
+		return err
 	}
 	var req CropChannelUpdateRequest
-	if !httpserver.Bind(c, &req) {
-		return nil
+	if err := httpserver.Bind(c, &req); err != nil {
+		return err
 	}
 	res, err := h.cropChannels.Update(c.Request().Context(), security.CurrentUserID(c), c.Param("cropId"), t, req)
 	if err != nil {
-		httpserver.RespondError(c, err)
-		return nil
+		return err
 	}
 	return c.JSON(http.StatusOK, res)
 }
@@ -117,13 +108,11 @@ func (h *Handler) cropUpdate(c echo.Context) error {
 func (h *Handler) share(c echo.Context) error {
 	t, err := parseType(c.Param("type"))
 	if err != nil {
-		httpserver.RespondError(c, err)
-		return nil
+		return err
 	}
 	res, err := h.cropChannels.ShareCode(c.Request().Context(), security.CurrentUserID(c), c.Param("cropId"), t)
 	if err != nil {
-		httpserver.RespondError(c, err)
-		return nil
+		return err
 	}
 	return c.JSON(http.StatusOK, res)
 }
@@ -131,12 +120,10 @@ func (h *Handler) share(c echo.Context) error {
 func (h *Handler) removeRecipient(c echo.Context) error {
 	t, err := parseType(c.Param("type"))
 	if err != nil {
-		httpserver.RespondError(c, err)
-		return nil
+		return err
 	}
 	if err := h.cropChannels.RemoveRecipient(c.Request().Context(), security.CurrentUserID(c), c.Param("cropId"), t, c.Param("recipientId")); err != nil {
-		httpserver.RespondError(c, err)
-		return nil
+		return err
 	}
 	return c.NoContent(http.StatusNoContent)
 }

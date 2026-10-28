@@ -31,26 +31,23 @@ func (h *Handler) Register(g *echo.Group) {
 func (h *Handler) listForCrop(c echo.Context) error {
 	limit, ok := queryInt(c, "limit", 30)
 	if !ok {
-		httpserver.RespondError(c, apperr.BadRequest("Parámetro inválido o faltante"))
-		return nil
+		return apperr.BadRequest("Parámetro inválido o faltante")
 	}
 	items, err := h.svc.List(c.Request().Context(), security.CurrentUserID(c), c.Param("cropId"), limit)
 	if err != nil {
-		httpserver.RespondError(c, err)
-		return nil
+		return err
 	}
 	return c.JSON(http.StatusOK, mapResponses(items))
 }
 
 func (h *Handler) send(c echo.Context) error {
 	var req CommandRequest
-	if !httpserver.Bind(c, &req) {
-		return nil
+	if err := httpserver.Bind(c, &req); err != nil {
+		return err
 	}
 	cmd, err := h.svc.Request(c.Request().Context(), security.CurrentUserID(c), c.Param("cropId"), req)
 	if err != nil {
-		httpserver.RespondError(c, err)
-		return nil
+		return err
 	}
 	return c.JSON(http.StatusAccepted, ToResponse(cmd))
 }
@@ -58,26 +55,23 @@ func (h *Handler) send(c echo.Context) error {
 func (h *Handler) listForOwner(c echo.Context) error {
 	limit, ok := queryInt(c, "limit", 50)
 	if !ok {
-		httpserver.RespondError(c, apperr.BadRequest("Parámetro inválido o faltante"))
-		return nil
+		return apperr.BadRequest("Parámetro inválido o faltante")
 	}
 	items, err := h.svc.ListForOwner(c.Request().Context(), security.CurrentUserID(c), limit)
 	if err != nil {
-		httpserver.RespondError(c, err)
-		return nil
+		return err
 	}
 	return c.JSON(http.StatusOK, mapResponses(items))
 }
 
 func (h *Handler) bulk(c echo.Context) error {
 	var req BulkCommandRequest
-	if !httpserver.Bind(c, &req) {
-		return nil
+	if err := httpserver.Bind(c, &req); err != nil {
+		return err
 	}
 	res, err := h.svc.RequestBulk(c.Request().Context(), security.CurrentUserID(c), req)
 	if err != nil {
-		httpserver.RespondError(c, err)
-		return nil
+		return err
 	}
 	return c.JSON(http.StatusAccepted, res)
 }

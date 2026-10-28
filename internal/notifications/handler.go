@@ -4,7 +4,6 @@ import (
 	"net/http"
 	"strconv"
 
-	"github.com/SmartPotTech/SmartPot-API-Go/internal/httpserver"
 	"github.com/SmartPotTech/SmartPot-API-Go/internal/platform/apperr"
 	"github.com/SmartPotTech/SmartPot-API-Go/internal/security"
 	"github.com/labstack/echo/v4"
@@ -32,18 +31,15 @@ func (h *Handler) Register(g *echo.Group) {
 func (h *Handler) list(c echo.Context) error {
 	unreadOnly, ok := queryBool(c, "unreadOnly", false)
 	if !ok {
-		httpserver.RespondError(c, apperr.BadRequest("Parámetro inválido o faltante"))
-		return nil
+		return apperr.BadRequest("Parámetro inválido o faltante")
 	}
 	limit, ok := queryInt(c, "limit", 50)
 	if !ok {
-		httpserver.RespondError(c, apperr.BadRequest("Parámetro inválido o faltante"))
-		return nil
+		return apperr.BadRequest("Parámetro inválido o faltante")
 	}
 	items, err := h.svc.List(c.Request().Context(), security.CurrentUserID(c), unreadOnly, limit)
 	if err != nil {
-		httpserver.RespondError(c, err)
-		return nil
+		return err
 	}
 	out := make([]Response, 0, len(items))
 	for _, n := range items {
@@ -55,8 +51,7 @@ func (h *Handler) list(c echo.Context) error {
 func (h *Handler) unreadCount(c echo.Context) error {
 	n, err := h.svc.UnreadCount(c.Request().Context(), security.CurrentUserID(c))
 	if err != nil {
-		httpserver.RespondError(c, err)
-		return nil
+		return err
 	}
 	return c.JSON(http.StatusOK, echo.Map{"unread": n})
 }
@@ -64,24 +59,21 @@ func (h *Handler) unreadCount(c echo.Context) error {
 func (h *Handler) markRead(c echo.Context) error {
 	n, err := h.svc.MarkRead(c.Request().Context(), security.CurrentUserID(c), c.Param("id"))
 	if err != nil {
-		httpserver.RespondError(c, err)
-		return nil
+		return err
 	}
 	return c.JSON(http.StatusOK, ToResponse(*n))
 }
 
 func (h *Handler) markAllRead(c echo.Context) error {
 	if err := h.svc.MarkAllRead(c.Request().Context(), security.CurrentUserID(c)); err != nil {
-		httpserver.RespondError(c, err)
-		return nil
+		return err
 	}
 	return c.NoContent(http.StatusNoContent)
 }
 
 func (h *Handler) delete(c echo.Context) error {
 	if err := h.svc.Delete(c.Request().Context(), security.CurrentUserID(c), c.Param("id")); err != nil {
-		httpserver.RespondError(c, err)
-		return nil
+		return err
 	}
 	return c.NoContent(http.StatusNoContent)
 }

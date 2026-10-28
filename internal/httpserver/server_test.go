@@ -9,6 +9,7 @@ import (
 	"net/http/httptest"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/SmartPotTech/SmartPot-API-Go/internal/platform/apperr"
 	"github.com/SmartPotTech/SmartPot-API-Go/internal/platform/validation"
@@ -116,12 +117,12 @@ func TestHTTPServer_Recovery(t *testing.T) {
 	}
 }
 
-func TestHTTPServer_Bind(t *testing.T) {
+func TestHTTPServer_BindAndExchangeableValidator(t *testing.T) {
 	e := New(testLogger())
 	e.POST("/bind", func(c echo.Context) error {
 		var payload testPayload
-		if !Bind(c, &payload) {
-			return nil
+		if err := Bind(c, &payload); err != nil {
+			return err
 		}
 		return c.JSON(http.StatusOK, payload)
 	})
@@ -134,7 +135,7 @@ func TestHTTPServer_Bind(t *testing.T) {
 		t.Fatalf("se esperaba status 400 para JSON inválido, se obtuvo %d", recBadJSON.Code)
 	}
 
-	// Validación fallida
+	// Validación fallida vía echo.Validator + HTTPErrorHandler centralizado
 	reqInvalid := httptest.NewRequest(http.MethodPost, "/bind", bytes.NewBufferString(`{"name":""}`))
 	recInvalid := httptest.NewRecorder()
 	e.ServeHTTP(recInvalid, reqInvalid)
@@ -153,5 +154,58 @@ func TestHTTPServer_Bind(t *testing.T) {
 	e.ServeHTTP(recValid, reqValid)
 	if recValid.Code != http.StatusOK {
 		t.Fatalf("se esperaba status 200, se obtuvo %d", recValid.Code)
+	}
+}
+
+func TestHTTPServer_TypedRequestContext(t *testing.T) {
+	e := New(testLogger())
+	exp := time.Now().Add(time.Hour).UTC().Truncate(time.Second)
+
+	e.GET("/ctx", func(c echo.Context) error {
+		rc := FromContext(c)
+		rc.SetIdentity(Identity{
+			UserID:    "usr-001",
+			Email:     "demo@smartpot.app",
+			Role:      "ADMIN",
+			ExpiresAt: exp,
+		})
+		if !rc.Identity().Authenticated || rc.UserID() != "usr-001" || rc.Email() != "demo@smartpot.app" || rc.Role() != "ADMIN" {
+			t.Fatalf("identidad tipada inválida: %+v", rc.Identity())
+		}
+		if rc.Trace().RequestID != "trace-abc-123" || rc.Trace().StartedAt.IsZero() {
+			t.Fatalf("traza de telemetría inválida: %+v", rc.Trace())
+		}
+		return c.NoContent(http.StatusOK)
+	})
+
+	req := httptest.NewRequest(http.MethodGet, "/ctx", nil)
+	req.Header.Set(echo.HeaderXRequestID, "trace-abc-123")
+	rec := httptest.NewRecorder()
+	e.ServeHTTP(rec, req)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("se esperaba 200, se obtuvo %d", rec.Code)
+	}
+}
+
+func TestHTTPServer_RadixZeroAllocation(t *testing.T) {
+	e := echo.New()
+	var capturedCrop, capturedActuator string
+	e.GET("/api/v1/crops/:cropId/actuators/:actuatorId", func(c echo.Context) error {
+		capturedCrop = c.Param("cropId")
+		capturedActuator = c.Param("actuatorId")
+		return nil
+	})
+
+	req := httptest.NewRequest(http.MethodGet, "/api/v1/crops/66f5a1000000000000000101/actuators/66f5a1000000000000000201", nil)
+	rec := httptest.NewRecorder()
+
+	allocs := testing.AllocsPerRun(100, func() {
+		e.ServeHTTP(rec, req)
+	})
+	if allocs != 0 {
+		t.Fatalf("se esperaban 0 asignaciones dinámicas en el árbol Radix, se obtuvieron %v", allocs)
+	}
+	if capturedCrop != "66f5a1000000000000000101" || capturedActuator != "66f5a1000000000000000201" {
+		t.Fatalf("parámetros mal extraídos: crop=%q actuator=%q", capturedCrop, capturedActuator)
 	}
 }
