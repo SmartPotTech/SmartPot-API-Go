@@ -1,10 +1,10 @@
 # Etapa de compilación: aquí se arma el binario estático.
-FROM golang:1.26-alpine AS build
+FROM golang:1.27.3-alpine AS build
 
 WORKDIR /src
 
-# Certificados para copiarlos a la imagen final (scratch no trae ninguno).
-RUN apk add --no-cache ca-certificates
+# Actualización de paquetes de seguridad en Alpine y certificados CA para el runtime scratch
+RUN apk update && apk upgrade --no-cache && apk add --no-cache ca-certificates
 
 # Descarga de módulos con caché de BuildKit: los rebuilds no vuelven a bajar dependencias de la red.
 COPY go.mod go.sum ./

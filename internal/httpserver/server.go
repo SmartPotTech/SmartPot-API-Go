@@ -5,6 +5,8 @@ package httpserver
 
 import (
 	"log/slog"
+	"os"
+	"strings"
 
 	"github.com/labstack/echo/v4"
 )
@@ -15,8 +17,19 @@ func New(logger *slog.Logger) *echo.Echo {
 	e.HideBanner = true
 	e.HidePort = true
 
-	// Extractor seguro de IP confiando en X-Forwarded-For de redes internas
-	e.IPExtractor = echo.ExtractIPFromXFFHeader()
+	// Extractor seguro de IP contra spoofing vía cabeceras X-Forwarded-For / X-Real-IP (CVE-2026-118653).
+	// Por defecto extrae directamente la IP de la conexión de red (RemoteAddr).
+	// Si se configura TRUST_PROXY=true o SMARTPOT_TRUST_PROXY=true, se habilita la extracción
+	// restringida exclusivamente a subredes privadas de proxy inverso de confianza.
+	if strings.EqualFold(os.Getenv("TRUST_PROXY"), "true") || strings.EqualFold(os.Getenv("SMARTPOT_TRUST_PROXY"), "true") {
+		e.IPExtractor = echo.ExtractIPFromXFFHeader(
+			echo.TrustLoopback(true),
+			echo.TrustLinkLocal(true),
+			echo.TrustPrivateNet(true),
+		)
+	} else {
+		e.IPExtractor = echo.ExtractIPDirect()
+	}
 
 	// Validador intercambiable desacoplado de bibliotecas externas de etiquetas
 	e.Validator = NewValidator()

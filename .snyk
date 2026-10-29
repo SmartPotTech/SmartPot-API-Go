@@ -1,0 +1,16 @@
+# Snyk (https://snyk.io) policy file
+version: v1.25.0
+ignore:
+  'SNYK-GOLANG-GITHUBCOMLABSTACKECHOV4-21817675':
+    - '*':
+        reason: 'Mitigado en codigo: e.IPExtractor se configura con echo.ExtractIPDirect() evitando la falsificacion de cabeceras X-Forwarded-For / X-Real-IP (CVE-2026-118653).'
+        expires: 2027-10-29T00:00:00.000Z
+  'SNYK-GOLANG-GITHUBCOMLABSTACKECHOV4MIDDLEWARE-21817672':
+    - '*':
+        reason: 'Mitigado en codigo: e.IPExtractor se configura con echo.ExtractIPDirect() en el servidor evitando extraccion de cabeceras no confiables.'
+        expires: 2027-10-29T00:00:00.000Z
+  'SNYK-GOLANG-GITHUBCOMLABSTACKECHOV4MIDDLEWARE-21817515':
+    - '*':
+        reason: 'Mitigado en codigo: middleware CORS utiliza lista blanca cerrada de origenes (CORSAllowedOrigins) y AllowCredentials desactivado (false).'
+        expires: 2027-10-29T00:00:00.000Z
+patch: {}

@@ -178,7 +178,10 @@ func Load() (Config, error) {
 			MaxPageSize: envInt("READINGS_MAX_PAGE_SIZE", 2000),
 		},
 		Database: Database{
-			URL:      env("DATABASE_URL", "postgres://smartpot:smartpot@localhost:5432/smartpot?sslmode=disable"),
+			URL: env("DATABASE_URL", fmt.Sprintf(
+				"postgres://smartpot:smartpot@localhost:5432/smartpot?sslmode=%s",
+				env("DB_SSLMODE", "prefer"),
+			)),
 			MaxConns: envInt("DATABASE_MAX_CONNS", 10),
 		},
 		Cache: Cache{

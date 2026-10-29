@@ -64,3 +64,42 @@ func TestRateLimiter(t *testing.T) {
 		t.Errorf("tercera auth: código %d, se esperaba 429", rec.Code)
 	}
 }
+
+func TestRateLimiter_SpoofedXForwardedForMitigation(t *testing.T) {
+	// Cupo de autenticación = 2
+	rl := NewRateLimiter(cache.NewStore(nil), 5, 2)
+	fixed := time.Now()
+	rl.now = func() time.Time { return fixed }
+
+	e := httpserver.New(discardLogger())
+	e.Use(rl.Middleware())
+	e.POST("/api/v1/auth/login", func(c echo.Context) error { return c.String(http.StatusOK, "ok") })
+
+	// El atacante realiza peticiones desde la misma conexión (RemoteAddr idéntica) pero
+	// falsifica cabeceras X-Forwarded-For y X-Real-IP con direcciones IP distintas en cada intento.
+	spoofedIPs := []string{
+		"198.51.100.1",
+		"198.51.100.2",
+		"198.51.100.3",
+	}
+
+	for i, spoofedIP := range spoofedIPs {
+		rec := httptest.NewRecorder()
+		req := httptest.NewRequest(http.MethodPost, "/api/v1/auth/login", nil)
+		req.RemoteAddr = "203.0.113.50:54321" // Dirección real de la conexión
+		req.Header.Set("X-Forwarded-For", spoofedIP)
+		req.Header.Set("X-Real-IP", spoofedIP)
+		e.ServeHTTP(rec, req)
+
+		if i < 2 {
+			if rec.Code != http.StatusOK {
+				t.Fatalf("intento %d con X-Forwarded-For %s: código %d, se esperaba 200", i+1, spoofedIP, rec.Code)
+			}
+		} else {
+			// El 3er intento debe ser bloqueado con 429 a pesar de la IP falsificada
+			if rec.Code != http.StatusTooManyRequests {
+				t.Fatalf("intento %d con X-Forwarded-For %s no fue bloqueado: código %d, se esperaba 429 Too Many Requests (CVE-2026-118653)", i+1, spoofedIP, rec.Code)
+			}
+		}
+	}
+}
