@@ -5,6 +5,8 @@ import (
 	"log/slog"
 	"strconv"
 	"strings"
+	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/SmartPotTech/SmartPot-API-Go/internal/cache"
@@ -24,7 +26,7 @@ type Crops interface {
 	MarkDeviceSeen(ctx context.Context, cropID string, online *bool)
 }
 
-// Service implementa la lógica de lecturas.
+// Service implementa la lógica de lecturas con soporte para ingesta por lotes de alto rendimiento.
 type Service struct {
 	repo        Repository
 	crops       Crops
@@ -33,6 +35,11 @@ type Service struct {
 	clock       func() time.Time
 	minInterval time.Duration
 	maxPageSize int
+
+	batchQueue  chan Reading
+	batchActive atomic.Bool
+	batchWg     sync.WaitGroup
+	batchStop   chan struct{}
 }
 
 // NewService crea el servicio de lecturas.
@@ -40,6 +47,74 @@ func NewService(repo Repository, crops Crops, store cache.Cache, bus *events.Bus
 	minInterval time.Duration, maxPageSize int) *Service {
 	return &Service{repo: repo, crops: crops, cache: store, bus: bus, clock: clock,
 		minInterval: minInterval, maxPageSize: maxPageSize}
+}
+
+// StartBatchWorker arranca el worker de ingesta por lotes con flush por ventana de tiempo (50ms) o tamaño (100).
+func (s *Service) StartBatchWorker(ctx context.Context) {
+	if s.batchActive.Swap(true) {
+		return
+	}
+	s.batchQueue = make(chan Reading, 2048)
+	s.batchStop = make(chan struct{})
+	s.batchWg.Add(1)
+
+	go func() {
+		defer s.batchWg.Done()
+		ticker := time.NewTicker(50 * time.Millisecond)
+		defer ticker.Stop()
+
+		batch := make([]Reading, 0, 100)
+
+		flush := func() {
+			if len(batch) == 0 {
+				return
+			}
+			flushCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+			if err := s.repo.InsertBatch(flushCtx, batch); err != nil {
+				slog.Error("falló la inserción en lote de telemetría", "count", len(batch), "err", err)
+			}
+			cancel()
+			batch = batch[:0]
+		}
+
+		for {
+			select {
+			case <-ctx.Done():
+				flush()
+				return
+			case <-s.batchStop:
+				// Drena la cola antes de salir
+				for {
+					select {
+					case r := <-s.batchQueue:
+						batch = append(batch, r)
+						if len(batch) >= 100 {
+							flush()
+						}
+					default:
+						flush()
+						return
+					}
+				}
+			case r := <-s.batchQueue:
+				batch = append(batch, r)
+				if len(batch) >= 100 {
+					flush()
+				}
+			case <-ticker.C:
+				flush()
+			}
+		}
+	}()
+}
+
+// StopBatchWorker detiene el worker y vacía cualquier lote pendiente en base de datos.
+func (s *Service) StopBatchWorker() {
+	if !s.batchActive.Swap(false) {
+		return
+	}
+	close(s.batchStop)
+	s.batchWg.Wait()
 }
 
 // RecordFromDevice guarda la telemetría del dispositivo. Se descarta si el
@@ -194,7 +269,16 @@ func (s *Service) store(ctx context.Context, cropID string, measures Measures, s
 	if !ok {
 		return nil, apperr.NotFound("El cultivo no existe")
 	}
-	reading := &Reading{CropID: oid, MeasuredAt: s.clock(), Measures: measures, Source: source}
+	reading := &Reading{ID: primitive.NewObjectID(), CropID: oid, MeasuredAt: s.clock(), Measures: measures, Source: source}
+	if source == SourceMQTT && s.batchActive.Load() {
+		select {
+		case s.batchQueue <- *reading:
+			s.bus.Publish(ReadingRecordedEvent{CropID: cropID, Reading: *reading})
+			return reading, nil
+		default:
+			slog.Warn("cola de lote de lecturas saturada; guardando inmediatamente", "cropId", cropID)
+		}
+	}
 	if err := s.repo.Insert(ctx, reading); err != nil {
 		return nil, err
 	}

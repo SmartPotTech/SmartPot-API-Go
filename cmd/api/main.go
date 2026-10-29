@@ -244,6 +244,7 @@ func run() error {
 	// Trabajos en segundo plano (sin cron en el servidor).
 	jobsCtx, stopJobs := context.WithCancel(context.Background())
 	defer stopJobs()
+	readingService.StartBatchWorker(jobsCtx)
 	go tick(jobsCtx, time.Minute, cacheStore.PurgeExpired)
 	go tick(jobsCtx, 30*time.Second, func() { commandService.ExpireStale(context.Background()) })
 	go tick(jobsCtx, cfg.AI.LearningFlush, func() { learningFeed.Flush(context.Background()) })
@@ -298,6 +299,7 @@ func run() error {
 		logger.Error("apagado del servidor con error", "err", err)
 	}
 	stopJobs()
+	readingService.StopBatchWorker()
 	telegramListener.Stop()
 	gateway.Close()
 	if err := cacheStore.Close(); err != nil {

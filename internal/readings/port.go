@@ -12,6 +12,7 @@ import (
 // hipertabla.
 type Repository interface {
 	Insert(ctx context.Context, reading *Reading) error
+	InsertBatch(ctx context.Context, readings []Reading) error
 	Latest(ctx context.Context, cropID primitive.ObjectID) (*Reading, error)
 	Recent(ctx context.Context, cropID primitive.ObjectID, limit int) ([]Reading, error)
 	Between(ctx context.Context, cropID primitive.ObjectID, from, to time.Time, limit int) ([]Reading, error)

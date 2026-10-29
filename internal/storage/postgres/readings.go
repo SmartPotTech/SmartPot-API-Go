@@ -90,6 +90,33 @@ func (r *ReadingRepository) Insert(ctx context.Context, reading *readings.Readin
 	return err
 }
 
+// InsertBatch guarda un conjunto de lecturas de telemetría en un único round-trip atómico con pgx.Batch.
+func (r *ReadingRepository) InsertBatch(ctx context.Context, batchReadings []readings.Reading) error {
+	if len(batchReadings) == 0 {
+		return nil
+	}
+	batch := &pgx.Batch{}
+	sql := "INSERT INTO readings (" + readingColumns + ") VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11)"
+	for i := range batchReadings {
+		rd := &batchReadings[i]
+		if rd.ID.IsZero() {
+			rd.ID = primitive.NewObjectID()
+		}
+		m := rd.Measures
+		batch.Queue(sql,
+			hexOf(rd.ID), hexOf(rd.CropID), rd.MeasuredAt, nullEnum(string(rd.Source)),
+			m.Temperature, m.Humidity, m.Brightness, m.Ph, m.Tds, m.Atmosphere, m.SoilMoisture)
+	}
+	br := r.pool.SendBatch(ctx, batch)
+	defer br.Close()
+	for range batchReadings {
+		if _, err := br.Exec(); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
 // Latest devuelve la última lectura del cultivo, o nil si no tiene.
 func (r *ReadingRepository) Latest(ctx context.Context, cropID primitive.ObjectID) (*readings.Reading, error) {
 	reading, err := scanReading(r.pool.QueryRow(ctx,
