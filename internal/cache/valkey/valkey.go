@@ -89,6 +89,14 @@ func (a *Adapter) GetDel(ctx context.Context, key string) (string, error) {
 	return val, err
 }
 
+// Del elimina una o más llaves del almacén Valkey.
+func (a *Adapter) Del(ctx context.Context, keys ...string) error {
+	if len(keys) == 0 {
+		return nil
+	}
+	return a.rdb.Del(ctx, keys...).Err()
+}
+
 // Ping comprueba la conexión.
 func (a *Adapter) Ping(ctx context.Context) error {
 	return a.rdb.Ping(ctx).Err()

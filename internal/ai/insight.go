@@ -2,14 +2,18 @@ package ai
 
 import (
 	"context"
+	"encoding/json"
+	"fmt"
 	"math"
 	"time"
 
 	"github.com/SmartPotTech/SmartPot-API-Go/internal/actuators"
+	"github.com/SmartPotTech/SmartPot-API-Go/internal/cache"
 	"github.com/SmartPotTech/SmartPot-API-Go/internal/crops"
 	"github.com/SmartPotTech/SmartPot-API-Go/internal/platform/apperr"
 	"github.com/SmartPotTech/SmartPot-API-Go/internal/platform/geo"
 	"github.com/SmartPotTech/SmartPot-API-Go/internal/readings"
+	"golang.org/x/sync/singleflight"
 )
 
 // historyWindowFactor: cuántas lecturas se revisan por cada punto enviado.
@@ -22,17 +26,19 @@ type InsightService struct {
 	readings  *readings.Service
 	actuators *actuators.Service
 	weather   *crops.WeatherService
+	cache     cache.Cache
+	flight    singleflight.Group
 	clock     func() time.Time
 	history   int
 	timezone  *time.Location
 }
 
-// NewInsightService crea el servicio de evaluación.
+// NewInsightService crea el servicio de evaluación con soporte de caché inteligente y singleflight.
 func NewInsightService(client *Client, cropsSvc *crops.Service, readingsSvc *readings.Service,
-	actuatorsSvc *actuators.Service, weather *crops.WeatherService, clock func() time.Time,
+	actuatorsSvc *actuators.Service, weather *crops.WeatherService, store cache.Cache, clock func() time.Time,
 	historySize int, timezone *time.Location) *InsightService {
 	return &InsightService{client: client, crops: cropsSvc, readings: readingsSvc, actuators: actuatorsSvc,
-		weather: weather, clock: clock, history: historySize, timezone: timezone}
+		weather: weather, cache: store, clock: clock, history: historySize, timezone: timezone}
 }
 
 // ForOwner evalúa el cultivo del dueño sobre su última lectura.
@@ -52,51 +58,83 @@ func (s *InsightService) ForOwner(ctx context.Context, ownerID, cropID string) (
 }
 
 // Evaluate consulta a la IA y guarda el índice de salud en el cultivo.
+// Utiliza caché inteligente de Valkey y singleflight para deduplicar llamadas concurrentes idénticas.
 func (s *InsightService) Evaluate(ctx context.Context, crop *crops.Crop, latest readings.Reading) (*InsightResponse, error) {
-	window, err := s.readings.Recent(ctx, crop.HexID(), s.history*historyWindowFactor)
-	if err != nil {
-		return nil, err
-	}
-	reverse(window)
-	history := make([]HistoryPoint, 0, s.history)
-	for _, r := range sample(window, s.history) {
-		history = append(history, historyPointOf(r))
-	}
-	actuatorsList, err := s.actuators.ListForCrop(ctx, crop.HexID())
-	if err != nil {
-		return nil, err
-	}
-	types := make([]string, 0, len(actuatorsList))
-	for i := range actuatorsList {
-		types = append(types, string(actuatorsList[i].Type))
+	cacheKey := fmt.Sprintf("insights:%s:%s:%d", crop.HexID(), latest.ID.Hex(), latest.MeasuredAt.Unix())
+	if s.cache != nil {
+		if raw, ok := s.cache.Get(cacheKey); ok {
+			var cached InsightResponse
+			if err := json.Unmarshal([]byte(raw), &cached); err == nil {
+				return &cached, nil
+			}
+		}
 	}
 
-	now := s.clock()
-	measuredAt := latest.MeasuredAt
-	if measuredAt.IsZero() {
-		measuredAt = now
-	}
-	localHour := measuredAt.In(s.timezone).Hour()
-	req := InsightRequest{
-		CropType:  string(crop.Type),
-		Measures:  latest.Measures,
-		History:   history,
-		Actuators: types,
-		LocalHour: &localHour,
-		Placement: place(crop.Placement),
-		Weather:   s.outside(ctx, crop),
-	}
-	resp, err := s.client.Insights(ctx, req)
+	flightKey := fmt.Sprintf("flight:insights:%s", crop.HexID())
+	v, err, _ := s.flight.Do(flightKey, func() (any, error) {
+		if s.cache != nil {
+			if raw, ok := s.cache.Get(cacheKey); ok {
+				var cached InsightResponse
+				if err := json.Unmarshal([]byte(raw), &cached); err == nil {
+					return &cached, nil
+				}
+			}
+		}
+
+		window, err := s.readings.Recent(ctx, crop.HexID(), s.history*historyWindowFactor)
+		if err != nil {
+			return nil, err
+		}
+		reverse(window)
+		history := make([]HistoryPoint, 0, s.history)
+		for _, r := range sample(window, s.history) {
+			history = append(history, historyPointOf(r))
+		}
+		actuatorsList, err := s.actuators.ListForCrop(ctx, crop.HexID())
+		if err != nil {
+			return nil, err
+		}
+		types := make([]string, 0, len(actuatorsList))
+		for i := range actuatorsList {
+			types = append(types, string(actuatorsList[i].Type))
+		}
+
+		now := s.clock()
+		measuredAt := latest.MeasuredAt
+		if measuredAt.IsZero() {
+			measuredAt = now
+		}
+		localHour := measuredAt.In(s.timezone).Hour()
+		req := InsightRequest{
+			CropType:  string(crop.Type),
+			Measures:  latest.Measures,
+			History:   history,
+			Actuators: types,
+			LocalHour: &localHour,
+			Placement: place(crop.Placement),
+			Weather:   s.outside(ctx, crop),
+		}
+		resp, err := s.client.Insights(ctx, req)
+		if err != nil {
+			return nil, err
+		}
+		resp.EvaluatedAt = now
+		if resp.Health != nil {
+			s.crops.UpdateHealth(ctx, crop.HexID(), crops.CropHealth{
+				Index: resp.Health.Index, Level: resp.Health.Level, Label: resp.Health.Label, EvaluatedAt: now,
+			})
+		}
+		if s.cache != nil {
+			if b, err := json.Marshal(resp); err == nil {
+				s.cache.Put(cacheKey, string(b), 60*time.Second)
+			}
+		}
+		return resp, nil
+	})
 	if err != nil {
 		return nil, err
 	}
-	resp.EvaluatedAt = now
-	if resp.Health != nil {
-		s.crops.UpdateHealth(ctx, crop.HexID(), crops.CropHealth{
-			Index: resp.Health.Index, Level: resp.Health.Level, Label: resp.Health.Label, EvaluatedAt: now,
-		})
-	}
-	return resp, nil
+	return v.(*InsightResponse), nil
 }
 
 func (s *InsightService) outside(ctx context.Context, crop *crops.Crop) *Outside {

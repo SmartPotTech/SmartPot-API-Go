@@ -39,7 +39,7 @@ func cropWithID(t *testing.T, hex string) *crops.Crop {
 
 func newTestController(v DeviceVerifier) *AuthnController {
 	cfg := config.MQTT{AuthnToken: testToken}
-	return NewAuthnController(cfg, v, NewTopicResolver("smartpot/v1"), slog.New(slog.DiscardHandler))
+	return NewAuthnController(cfg, v, nil, NewTopicResolver("smartpot/v1"), slog.New(slog.DiscardHandler))
 }
 
 func doAuthn(c *AuthnController, token, body string) *httptest.ResponseRecorder {
@@ -137,7 +137,7 @@ func TestAuthn_IgnoresOnDatabaseError(t *testing.T) {
 func TestAuthn_EmptyTokenDeniesAll(t *testing.T) {
 	id := "6718f0a1b2c3d4e5f6a7b8c9"
 	c := NewAuthnController(config.MQTT{AuthnToken: ""}, fakeVerifier{crop: cropWithID(t, id), key: "k", hasKey: true},
-		NewTopicResolver("smartpot/v1"), slog.New(slog.DiscardHandler))
+		nil, NewTopicResolver("smartpot/v1"), slog.New(slog.DiscardHandler))
 	rec := doAuthn(c, "", `{"username":"`+id+`","password":"k"}`)
 	if resp := decode(t, rec); resp.Result != "deny" {
 		t.Fatalf("con token vacío todo debe rechazarse; obtuve %q", resp.Result)

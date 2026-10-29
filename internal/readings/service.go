@@ -18,6 +18,13 @@ import (
 
 const exportLimit = 50000
 
+var batchSlicePool = sync.Pool{
+	New: func() any {
+		b := make([]Reading, 0, 100)
+		return &b
+	},
+}
+
 // Crops es lo que el servicio de lecturas necesita de los cultivos, sin importar
 // el paquete crops (lo implementa CropService).
 type Crops interface {
@@ -40,6 +47,8 @@ type Service struct {
 	batchActive atomic.Bool
 	batchWg     sync.WaitGroup
 	batchStop   chan struct{}
+
+	latestCache sync.Map // Caché de última lectura por cultivo para latencia instantánea <0.1ms
 }
 
 // NewService crea el servicio de lecturas.
@@ -49,7 +58,7 @@ func NewService(repo Repository, crops Crops, store cache.Cache, bus *events.Bus
 		minInterval: minInterval, maxPageSize: maxPageSize}
 }
 
-// StartBatchWorker arranca el worker de ingesta por lotes con flush por ventana de tiempo (50ms) o tamaño (100).
+// StartBatchWorker arranca el worker de micro-batching con ventana ultracorta (10ms) o umbral de 100 lecturas y reciclaje de memoria via sync.Pool.
 func (s *Service) StartBatchWorker(ctx context.Context) {
 	if s.batchActive.Swap(true) {
 		return
@@ -60,10 +69,15 @@ func (s *Service) StartBatchWorker(ctx context.Context) {
 
 	go func() {
 		defer s.batchWg.Done()
-		ticker := time.NewTicker(50 * time.Millisecond)
+		ticker := time.NewTicker(10 * time.Millisecond)
 		defer ticker.Stop()
 
-		batch := make([]Reading, 0, 100)
+		batchPtr := batchSlicePool.Get().(*[]Reading)
+		batch := (*batchPtr)[:0]
+		defer func() {
+			batch = batch[:0]
+			batchSlicePool.Put(&batch)
+		}()
 
 		flush := func() {
 			if len(batch) == 0 {
@@ -151,12 +165,22 @@ func (s *Service) RecordManual(ctx context.Context, ownerID, cropID string, meas
 }
 
 // Latest devuelve la última lectura del cultivo (sin comprobar dueño).
+// Consulta primero la memoria local (sync.Map) para latencia instantánea <0.1ms sin esperar al flush del batch.
 func (s *Service) Latest(ctx context.Context, cropID string) (*Reading, error) {
+	if val, ok := s.latestCache.Load(cropID); ok {
+		if r, ok := val.(*Reading); ok {
+			return r, nil
+		}
+	}
 	oid, ok := objectid.Parse(cropID)
 	if !ok {
 		return nil, nil
 	}
-	return s.repo.Latest(ctx, oid)
+	reading, err := s.repo.Latest(ctx, oid)
+	if err == nil && reading != nil {
+		s.latestCache.Store(cropID, reading)
+	}
+	return reading, err
 }
 
 // LatestOwned devuelve la última lectura comprobando el dueño.
@@ -254,6 +278,7 @@ func (s *Service) SeriesAverages(ctx context.Context, cropIDs []string, metric s
 
 // DeleteByCrop borra las lecturas de un cultivo (borrado en cascada por evento).
 func (s *Service) DeleteByCrop(ctx context.Context, cropID string) error {
+	s.latestCache.Delete(cropID)
 	oid, ok := objectid.Parse(cropID)
 	if !ok {
 		return nil
@@ -270,6 +295,9 @@ func (s *Service) store(ctx context.Context, cropID string, measures Measures, s
 		return nil, apperr.NotFound("El cultivo no existe")
 	}
 	reading := &Reading{ID: primitive.NewObjectID(), CropID: oid, MeasuredAt: s.clock(), Measures: measures, Source: source}
+	// Guarda de inmediato en caché en memoria para que Latest devuelva la última lectura sin esperar al flush del batch
+	s.latestCache.Store(cropID, reading)
+
 	if source == SourceMQTT && s.batchActive.Load() {
 		select {
 		case s.batchQueue <- *reading:

@@ -6,7 +6,9 @@ import (
 	"encoding/json"
 	"log/slog"
 	"net/http"
+	"time"
 
+	"github.com/SmartPotTech/SmartPot-API-Go/internal/cache"
 	"github.com/SmartPotTech/SmartPot-API-Go/internal/config"
 	"github.com/SmartPotTech/SmartPot-API-Go/internal/crops"
 	"github.com/labstack/echo/v4"
@@ -29,16 +31,17 @@ type DeviceVerifier interface {
 type AuthnController struct {
 	token  string
 	crops  DeviceVerifier
+	cache  cache.Cache
 	topics *TopicResolver
 	log    *slog.Logger
 }
 
-// NewAuthnController crea el controlador de autenticación de dispositivos.
-func NewAuthnController(cfg config.MQTT, cropsSvc DeviceVerifier, topics *TopicResolver, logger *slog.Logger) *AuthnController {
+// NewAuthnController crea el controlador de autenticación de dispositivos con soporte de caché.
+func NewAuthnController(cfg config.MQTT, cropsSvc DeviceVerifier, store cache.Cache, topics *TopicResolver, logger *slog.Logger) *AuthnController {
 	if cfg.AuthnToken == "" {
 		logger.Warn("MQTT_AUTHN_TOKEN vacío: el broker no podrá autenticar dispositivos (se rechazarán todos)")
 	}
-	return &AuthnController{token: cfg.AuthnToken, crops: cropsSvc, topics: topics, log: logger}
+	return &AuthnController{token: cfg.AuthnToken, crops: cropsSvc, cache: store, topics: topics, log: logger}
 }
 
 // Register monta la ruta interna fuera de /api/v1 (sin JWT ni límite de tasa).
@@ -78,6 +81,18 @@ func (c *AuthnController) authenticate(ctx echo.Context) error {
 	if err := json.NewDecoder(ctx.Request().Body).Decode(&req); err != nil {
 		return ctx.JSON(http.StatusOK, deny)
 	}
+
+	// Consulta rápida en caché (evita pegar a PostgreSQL en cada reconexión o validación)
+	cacheKey := "crop:key:" + req.Username
+	if c.cache != nil {
+		if cachedKey, ok := c.cache.Get(cacheKey); ok {
+			if subtle.ConstantTimeCompare([]byte(cachedKey), []byte(req.Password)) != 1 {
+				return ctx.JSON(http.StatusOK, deny)
+			}
+			return ctx.JSON(http.StatusOK, authnResponse{Result: "allow", ACL: c.deviceACL(req.Username)})
+		}
+	}
+
 	crop, err := c.crops.Find(ctx.Request().Context(), req.Username)
 	if err != nil {
 		// Error real de la base: 5xx para que EMQX lo trate como "ignore" y no cachee un rechazo.
@@ -91,7 +106,17 @@ func (c *AuthnController) authenticate(ctx echo.Context) error {
 	if !ok || subtle.ConstantTimeCompare([]byte(key), []byte(req.Password)) != 1 {
 		return ctx.JSON(http.StatusOK, deny)
 	}
+	if c.cache != nil {
+		c.cache.Put(cacheKey, key, 5*time.Minute)
+	}
 	return ctx.JSON(http.StatusOK, authnResponse{Result: "allow", ACL: c.deviceACL(crop.HexID())})
+}
+
+// Invalidate invalida la clave del dispositivo en caché (por borrado o rotación).
+func (c *AuthnController) Invalidate(cropID string) {
+	if c.cache != nil && cropID != "" {
+		c.cache.Delete("crop:key:" + cropID)
+	}
 }
 
 // deviceACL acota el dispositivo a los tópicos de su propio cultivo; lo demás se niega.

@@ -140,12 +140,12 @@ func run() error {
 	}
 	aiClient := ai.NewClient(cfg.AI, cacheStore, clock)
 	insightService := ai.NewInsightService(aiClient, cropService, readingService, actuatorService, weatherService,
-		clock, cfg.AI.HistorySize, timezone)
+		cacheStore, clock, cfg.AI.HistorySize, timezone)
 	agent := ai.NewAutomationAgent(insightService, commandService, notificationService, cacheStore, aiClient,
 		cropService, cfg.AI.EvaluationInterval, cfg.AI.AutomationCooldown)
 	learningFeed := ai.NewLearningFeed(aiClient, cropService, cfg.AI.LearningEnabled, timezone)
 	overviewService := overview.NewService(cropService, readingService, actuatorService, commandService,
-		notificationService, aiClient, clock, timezone)
+		notificationService, aiClient, cacheStore, clock, timezone)
 	events.Subscribe(bus, func(e readings.ReadingRecordedEvent) { go agent.OnReading(e) })
 	events.Subscribe(bus, func(e readings.ReadingRecordedEvent) { learningFeed.OnReading(e) })
 	events.Subscribe(bus, func(e crops.DeletedEvent) { go learningFeed.OnCropDeleted(e) })
@@ -197,9 +197,12 @@ func run() error {
 	// Servidor HTTP.
 	rateLimiter := security.NewRateLimiter(cacheStore, cfg.Security.RateLimitPerMinute, cfg.Security.AuthRateLimitPerMinute)
 	engine := httpserver.New(logger)
-	// El broker (EMQX) autentica los dispositivos contra este endpoint interno. Va antes del límite de
+	// El broker (EMQX) autentica los dispositivos contra este endpoint interno con caché. Va antes del límite de
 	// tasa y de CORS: lo llama el propio broker en cada conexión, no un navegador.
-	mqtt.NewAuthnController(cfg.MQTT, cropService, topics, logger).Register(engine)
+	authnController := mqtt.NewAuthnController(cfg.MQTT, cropService, cacheStore, topics, logger)
+	authnController.Register(engine)
+	events.Subscribe(bus, func(e crops.DeletedEvent) { authnController.Invalidate(e.CropID) })
+	events.Subscribe(bus, func(e crops.DeviceKeyRotatedEvent) { authnController.Invalidate(e.CropID) })
 	engine.Use(security.CORS(cfg.Security.CORSAllowedOrigins), rateLimiter.Middleware())
 
 	checker := health.Checker{

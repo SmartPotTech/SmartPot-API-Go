@@ -147,6 +147,16 @@ func (f *fakeBackend) GetDel(_ context.Context, key string) (string, error) {
 	return v, nil
 }
 
+func (f *fakeBackend) Del(_ context.Context, keys ...string) error {
+	if f.fail {
+		return errDown
+	}
+	for _, k := range keys {
+		delete(f.data, k)
+	}
+	return nil
+}
+
 func (f *fakeBackend) Ping(_ context.Context) error {
 	if f.fail {
 		return errDown
@@ -178,6 +188,11 @@ func TestStoreUsesBackend(t *testing.T) {
 	}
 	if _, ok := s.Get("k"); ok {
 		t.Error("Take debía borrar la llave del backend")
+	}
+	s.Put("del_me", "123", time.Minute)
+	s.Delete("del_me")
+	if _, ok := s.Get("del_me"); ok {
+		t.Error("Delete debía borrar la llave")
 	}
 }
 

@@ -32,6 +32,7 @@ type Cache interface {
 	Get(key string) (string, bool)
 	Put(key, value string, ttl time.Duration)
 	Take(key string) (string, bool)
+	Delete(keys ...string)
 	Available() bool
 }
 
@@ -44,6 +45,7 @@ type Backend interface {
 	Get(ctx context.Context, key string) (string, error)
 	Set(ctx context.Context, key, value string, ttl time.Duration) error
 	GetDel(ctx context.Context, key string) (string, error)
+	Del(ctx context.Context, keys ...string) error
 	Ping(ctx context.Context) error
 	Close() error
 }
@@ -184,6 +186,30 @@ func (s *Store) Take(key string) (string, bool) {
 		return "", false
 	}
 	return e.value, true
+}
+
+// Delete elimina una o más llaves de la caché remota y local.
+func (s *Store) Delete(keys ...string) {
+	if len(keys) == 0 {
+		return
+	}
+	fullKeys := make([]string, len(keys))
+	for i, k := range keys {
+		fullKeys[i] = keyPrefix + k
+	}
+	if s.backendReady() {
+		ctx, cancel := context.WithTimeout(context.Background(), opTimeout)
+		err := s.backend.Del(ctx, fullKeys...)
+		cancel()
+		if err != nil {
+			s.markDown(err)
+		}
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	for _, k := range fullKeys {
+		delete(s.local, k)
+	}
 }
 
 // Available hace ping al backend (independiente del backoff).

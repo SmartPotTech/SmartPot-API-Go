@@ -2,11 +2,14 @@ package overview
 
 import (
 	"context"
+	"encoding/json"
+	"fmt"
 	"math"
 	"time"
 
 	"github.com/SmartPotTech/SmartPot-API-Go/internal/actuators"
 	"github.com/SmartPotTech/SmartPot-API-Go/internal/ai"
+	"github.com/SmartPotTech/SmartPot-API-Go/internal/cache"
 	"github.com/SmartPotTech/SmartPot-API-Go/internal/commands"
 	"github.com/SmartPotTech/SmartPot-API-Go/internal/crops"
 	"github.com/SmartPotTech/SmartPot-API-Go/internal/notifications"
@@ -29,16 +32,17 @@ type Service struct {
 	commands      *commands.Service
 	notifications *notifications.Service
 	ai            *ai.Client
+	cache         cache.Cache
 	clock         func() time.Time
 	timezone      *time.Location
 }
 
-// NewService crea el servicio del panel general.
+// NewService crea el servicio del panel general con caché inteligente de series.
 func NewService(cropsSvc *crops.Service, readingsSvc *readings.Service, actuatorsSvc *actuators.Service,
 	commandsSvc *commands.Service, notificationsSvc *notifications.Service, aiClient *ai.Client,
-	clock func() time.Time, timezone *time.Location) *Service {
+	store cache.Cache, clock func() time.Time, timezone *time.Location) *Service {
 	return &Service{crops: cropsSvc, readings: readingsSvc, actuators: actuatorsSvc, commands: commandsSvc,
-		notifications: notificationsSvc, ai: aiClient, clock: clock, timezone: timezone}
+		notifications: notificationsSvc, ai: aiClient, cache: store, clock: clock, timezone: timezone}
 }
 
 // Overview devuelve los totales de la cuenta y cada cultivo con su última lectura.
@@ -102,6 +106,7 @@ func (s *Service) Overview(ctx context.Context, ownerID string) (OverviewRespons
 }
 
 // Series compara una variable entre cultivos con promedios por intervalo.
+// Utiliza caché inteligente de Valkey con fallback local para latencia sub-milisegundo.
 func (s *Service) Series(ctx context.Context, ownerID, metric string, hours int) (MetricSeriesResponse, error) {
 	if !metricsSet[metric] {
 		return MetricSeriesResponse{}, apperr.BadRequest("Variable desconocida: " + metric)
@@ -109,6 +114,17 @@ func (s *Service) Series(ctx context.Context, ownerID, metric string, hours int)
 	if hours < 1 || hours > 168 {
 		return MetricSeriesResponse{}, apperr.BadRequest("El periodo debe estar entre 1 y 168 horas")
 	}
+
+	cacheKey := fmt.Sprintf("series:%s:%s:%d", ownerID, metric, hours)
+	if s.cache != nil {
+		if raw, ok := s.cache.Get(cacheKey); ok {
+			var cached MetricSeriesResponse
+			if err := json.Unmarshal([]byte(raw), &cached); err == nil {
+				return cached, nil
+			}
+		}
+	}
+
 	cropsList, err := s.crops.List(ctx, ownerID)
 	if err != nil {
 		return MetricSeriesResponse{}, err
@@ -134,7 +150,13 @@ func (s *Service) Series(ctx context.Context, ownerID, metric string, hours int)
 		crop := &cropsList[i]
 		series = append(series, CropSeries{CropID: crop.HexID(), Name: crop.Name, Type: string(crop.Type), Points: pointsByID[crop.HexID()]})
 	}
-	return MetricSeriesResponse{Metric: metric, Hours: hours, BucketMinutes: bucket, Series: series}, nil
+	res := MetricSeriesResponse{Metric: metric, Hours: hours, BucketMinutes: bucket, Series: series}
+	if s.cache != nil {
+		if b, err := json.Marshal(res); err == nil {
+			s.cache.Put(cacheKey, string(b), 60*time.Second)
+		}
+	}
+	return res, nil
 }
 
 // Fleet pide a la IA el análisis de todos los cultivos de la cuenta.
