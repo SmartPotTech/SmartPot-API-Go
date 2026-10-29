@@ -24,7 +24,7 @@ const (
 	healthTTL      = 30 * time.Second
 )
 
-// Client es el cliente HTTP del servicio interno de IA.
+// Client es el cliente HTTP del servicio interno de IA con Circuit Breaker, Retry exponencial y Singleflight.
 type Client struct {
 	enabled bool
 	baseURL string
@@ -32,6 +32,9 @@ type Client struct {
 	http    *http.Client
 	cache   cache.Cache
 	clock   func() time.Time
+
+	cb *CircuitBreaker
+	sf *Singleflight
 
 	mu              sync.Mutex
 	healthCheckedAt time.Time
@@ -47,11 +50,21 @@ func NewClient(cfg config.AI, store cache.Cache, clock func() time.Time) *Client
 		http:    &http.Client{Timeout: cfg.Timeout},
 		cache:   store,
 		clock:   clock,
+		cb:      NewCircuitBreaker(5, 10*time.Second, clock),
+		sf:      NewSingleflight(),
 	}
 }
 
 // IsEnabled indica si el asistente está habilitado.
 func (c *Client) IsEnabled() bool { return c.enabled }
+
+// CircuitState devuelve el estado actual del Circuit Breaker (CLOSED, HALF-OPEN, OPEN).
+func (c *Client) CircuitState() CircuitState {
+	if c.cb == nil {
+		return StateClosed
+	}
+	return c.cb.State()
+}
 
 // Insights evalúa un cultivo.
 func (c *Client) Insights(ctx context.Context, req InsightRequest) (*InsightResponse, error) {
@@ -95,7 +108,7 @@ func (c *Client) Forget(ctx context.Context, cropID string) {
 	}
 }
 
-// LearningStatusJSON devuelve lo aprendido (agregado por especie), cacheado 1 min.
+// LearningStatusJSON devuelve lo aprendido (agregado por especie), cacheado 1 min y protegido contra Cache Stampede.
 func (c *Client) LearningStatusJSON(ctx context.Context) (string, error) {
 	if err := c.requireEnabled(); err != nil {
 		return "", err
@@ -103,7 +116,7 @@ func (c *Client) LearningStatusJSON(ctx context.Context) (string, error) {
 	return c.cachedGet(ctx, "ai:learning-status", "/v1/learning/status", learningTTL)
 }
 
-// CropProfilesJSON devuelve los rangos óptimos por especie, cacheados 1 h.
+// CropProfilesJSON devuelve los rangos óptimos por especie, cacheados 1 h y protegidos contra Cache Stampede.
 func (c *Client) CropProfilesJSON(ctx context.Context) (string, error) {
 	if err := c.requireEnabled(); err != nil {
 		return "", err
@@ -133,34 +146,44 @@ func (c *Client) cachedGet(ctx context.Context, key, path string, ttl time.Durat
 	if cached, ok := c.cache.Get(key); ok {
 		return cached, nil
 	}
-	body, err := c.getRaw(ctx, path)
+
+	// Singleflight: si hay múltiples solicitudes concurrentes, solo una hace la petición HTTP
+	val, err := c.sf.Do(key, func() (any, error) {
+		if cached, ok := c.cache.Get(key); ok {
+			return cached, nil
+		}
+		body, err := c.getRaw(ctx, path)
+		if err != nil {
+			return "", err
+		}
+		c.cache.Put(key, body, ttl)
+		return body, nil
+	})
 	if err != nil {
 		return "", err
 	}
-	c.cache.Put(key, body, ttl)
-	return body, nil
+	return val.(string), nil
 }
 
 func (c *Client) getRaw(ctx context.Context, path string) (string, error) {
-	req, err := http.NewRequestWithContext(ctx, http.MethodGet, c.baseURL+path, nil)
-	if err != nil {
-		return "", apperr.Unavailable(unavailableMsg)
-	}
-	req.Header.Set("Authorization", "Bearer "+c.token)
-	resp, err := c.http.Do(req)
-	if err != nil {
-		slog.Warn("falló la consulta al servicio de IA", "path", path, "err", err)
-		return "", apperr.Unavailable(unavailableMsg)
-	}
-	defer resp.Body.Close()
-	body, _ := io.ReadAll(resp.Body)
-	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
-		return "", apperr.Unavailable(unavailableMsg)
-	}
-	return string(body), nil
+	var body string
+	err := c.do(ctx, http.MethodGet, path, nil, &body)
+	return body, err
 }
 
 func (c *Client) do(ctx context.Context, method, path string, body, out any) error {
+	isIdempotent := method == http.MethodGet
+
+	return c.cb.Execute(func() error {
+		return RetryWithBackoff(ctx, 3, 50*time.Millisecond, func(err error) bool {
+			return isIdempotent && isTransientError(err)
+		}, func() error {
+			return c.doRaw(ctx, method, path, body, out)
+		})
+	})
+}
+
+func (c *Client) doRaw(ctx context.Context, method, path string, body, out any) error {
 	var reader io.Reader
 	if body != nil {
 		data, err := json.Marshal(body)
@@ -187,6 +210,11 @@ func (c *Client) do(ctx context.Context, method, path string, body, out any) err
 		return apperr.Unavailable(unavailableMsg)
 	}
 	if out != nil {
+		if strPtr, ok := out.(*string); ok {
+			rawBytes, _ := io.ReadAll(resp.Body)
+			*strPtr = string(rawBytes)
+			return nil
+		}
 		if err := json.NewDecoder(resp.Body).Decode(out); err != nil {
 			return apperr.Unavailable(unavailableMsg)
 		}

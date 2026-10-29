@@ -106,6 +106,7 @@ func contextMiddleware() echo.MiddlewareFunc {
 			if reqID == "" {
 				reqID = strconv.FormatUint(requestCounter.Add(1), 36)
 			}
+			c.Response().Header().Set(echo.HeaderXRequestID, reqID)
 			rc := contextPool.Get().(*RequestContext)
 			rc.reset(c, TelemetryTrace{
 				RequestID: reqID,
