@@ -49,6 +49,21 @@ func (r *TopicResolver) Subscriptions() []string {
 	return []string{r.Telemetry("+"), r.CommandAck("+"), r.Status("+")}
 }
 
+// SharedSubscriptions devuelve los tópicos usando el prefijo de suscripción compartida de EMQX ($share/{group}/{topic}).
+// Permite que múltiples réplicas de SmartPot-API balanceen la telemetría sin duplicar eventos.
+func (r *TopicResolver) SharedSubscriptions(group string) []string {
+	if strings.TrimSpace(group) == "" || strings.EqualFold(group, "none") {
+		return r.Subscriptions()
+	}
+	subs := r.Subscriptions()
+	shared := make([]string, len(subs))
+	prefix := "$share/" + strings.Trim(group, "/") + "/"
+	for i, sub := range subs {
+		shared[i] = prefix + sub
+	}
+	return shared
+}
+
 // Parse interpreta un tópico entrante; devuelve false si no es un tópico v1 válido.
 func (r *TopicResolver) Parse(topic string) (ParsedTopic, bool) {
 	if topic == "" || !strings.HasPrefix(topic, r.prefix+"/") {

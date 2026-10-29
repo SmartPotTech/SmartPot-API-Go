@@ -4,6 +4,8 @@ import (
 	"crypto/rand"
 	"encoding/hex"
 	"log/slog"
+	"runtime"
+	"sync"
 	"sync/atomic"
 	"time"
 
@@ -12,28 +14,49 @@ import (
 )
 
 const (
-	publishTimeout = 5 * time.Second
-	connectTimeout = 10 * time.Second
+	publishTimeout     = 5 * time.Second
+	connectTimeout     = 10 * time.Second
+	defaultJobQueueCap = 2048
 )
 
-// Gateway es el cliente del broker con reconexión automática. Los mensajes se
-// procesan en goroutines para no bloquear el hilo de callbacks de Paho.
+type mqttJob struct {
+	topic   string
+	payload string
+}
+
+// Gateway es el cliente del broker con reconexión automática y worker pool concurrente con backpressure.
+// Evita la creación descontrolada de goroutines ante ráfagas de telemetría y soporta suscripciones compartidas ($share).
 type Gateway struct {
-	enabled   bool
-	client    paho.Client
-	topics    *TopicResolver
-	router    func(topic, payload string)
-	log       *slog.Logger
-	connected atomic.Bool
+	enabled     bool
+	client      paho.Client
+	topics      *TopicResolver
+	router      func(topic, payload string)
+	log         *slog.Logger
+	connected   atomic.Bool
+	sharedGroup string
+
+	// Worker Pool con backpressure
+	jobs       chan mqttJob
+	workerWg   sync.WaitGroup
+	stopSignal chan struct{}
+	stopped    atomic.Bool
 }
 
 // NewGateway crea el gateway. Si MQTT está deshabilitado, no abre conexión.
 func NewGateway(cfg config.MQTT, topics *TopicResolver, logger *slog.Logger) *Gateway {
-	g := &Gateway{enabled: cfg.Enabled, topics: topics, log: logger}
+	g := &Gateway{
+		enabled:     cfg.Enabled,
+		topics:      topics,
+		log:         logger,
+		sharedGroup: cfg.SharedSubscriptionGroup,
+		jobs:        make(chan mqttJob, defaultJobQueueCap),
+		stopSignal:  make(chan struct{}),
+	}
 	if !cfg.Enabled {
 		logger.Info("MQTT deshabilitado: la API no recibirá telemetría ni enviará comandos")
 		return g
 	}
+
 	opts := paho.NewClientOptions().
 		AddBroker(cfg.BrokerURI).
 		SetClientID(cfg.ClientID + "-" + randomSuffix()).
@@ -62,19 +85,47 @@ func NewGateway(cfg config.MQTT, topics *TopicResolver, logger *slog.Logger) *Ga
 // SetRouter fija el enrutador de mensajes entrantes.
 func (g *Gateway) SetRouter(router func(topic, payload string)) { g.router = router }
 
-// Start conecta al broker (con reintentos en segundo plano).
+// Start arranca el worker pool e inicia la conexión al broker.
 func (g *Gateway) Start() {
 	if !g.enabled {
 		return
 	}
+
+	// Inicia el pool de workers para procesar mensajes concurrentemente con backpressure
+	numWorkers := runtime.NumCPU() * 2
+	if numWorkers < 4 {
+		numWorkers = 4
+	}
+	if numWorkers > 32 {
+		numWorkers = 32
+	}
+	g.log.Info("iniciando worker pool de MQTT", "workers", numWorkers, "queueCapacity", cap(g.jobs))
+	for i := 0; i < numWorkers; i++ {
+		g.workerWg.Add(1)
+		go g.worker(i)
+	}
+
 	g.client.Connect()
 }
 
-// Close cierra la conexión.
+// Close drena los mensajes pendientes en el worker pool y cierra la conexión al broker.
 func (g *Gateway) Close() {
-	if g.enabled && g.client != nil {
+	if !g.enabled {
+		return
+	}
+	if g.stopped.Swap(true) {
+		return
+	}
+
+	// Desconecta del broker para dejar de recibir mensajes nuevos
+	if g.client != nil && g.client.IsConnected() {
 		g.client.Disconnect(3000)
 	}
+
+	// Señaliza a los workers y espera el drenado limpio de la cola
+	close(g.stopSignal)
+	g.workerWg.Wait()
+	g.log.Info("worker pool de MQTT detenido limpiamente")
 }
 
 // IsEnabled indica si MQTT está habilitado.
@@ -109,7 +160,11 @@ func (g *Gateway) PublishCommand(cropID, payload string) bool {
 
 func (g *Gateway) onConnected(c paho.Client) {
 	subscriptions := make(map[string]byte)
-	for _, topic := range g.topics.Subscriptions() {
+	topicsList := g.topics.Subscriptions()
+	if g.sharedGroup != "" {
+		topicsList = g.topics.SharedSubscriptions(g.sharedGroup)
+	}
+	for _, topic := range topicsList {
 		subscriptions[topic] = 1
 	}
 	token := c.SubscribeMultiple(subscriptions, g.onMessage)
@@ -117,15 +172,47 @@ func (g *Gateway) onConnected(c paho.Client) {
 		g.log.Error("no se pudo suscribir a los tópicos de SmartPot", "err", token.Error())
 	}
 	reconnect := g.connected.Swap(true)
-	g.log.Info("conectado al broker MQTT", "reconexion", reconnect)
+	g.log.Info("conectado al broker MQTT", "reconexion", reconnect, "sharedGroup", g.sharedGroup)
 }
 
 func (g *Gateway) onMessage(_ paho.Client, m paho.Message) {
-	if g.router == nil {
+	if g.router == nil || g.stopped.Load() {
 		return
 	}
-	topic, payload := m.Topic(), string(m.Payload())
-	go g.router(topic, payload)
+	job := mqttJob{topic: m.Topic(), payload: string(m.Payload())}
+	select {
+	case g.jobs <- job:
+	default:
+		// Backpressure activo: la cola está llena ante una ráfaga masiva
+		g.log.Warn("cola de telemetría MQTT saturada; aplicando backpressure", "topic", job.topic)
+	}
+}
+
+func (g *Gateway) worker(id int) {
+	defer g.workerWg.Done()
+	for {
+		select {
+		case <-g.stopSignal:
+			// Drena los mensajes restantes en la cola antes de salir
+			for {
+				select {
+				case job := <-g.jobs:
+					if g.router != nil {
+						g.router(job.topic, job.payload)
+					}
+				default:
+					return
+				}
+			}
+		case job, ok := <-g.jobs:
+			if !ok {
+				return
+			}
+			if g.router != nil {
+				g.router(job.topic, job.payload)
+			}
+		}
+	}
 }
 
 func randomSuffix() string {

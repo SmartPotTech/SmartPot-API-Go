@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"strconv"
 	"strings"
+	"sync"
 
 	"github.com/SmartPotTech/SmartPot-API-Go/internal/commands"
 	"github.com/SmartPotTech/SmartPot-API-Go/internal/readings"
@@ -13,13 +14,28 @@ import (
 
 const maxPayload = 4096
 
+// Pool para reutilizar mapas de deserialización y reducir la presión sobre el GC en el hot-path MQTT.
+var mapPool = sync.Pool{
+	New: func() any {
+		return make(map[string]any, 16)
+	},
+}
+
 // ParseTelemetry lee la telemetría del dispositivo. Acepta números o textos
 // numéricos, ignora campos desconocidos y valida los rangos físicos.
 func ParseTelemetry(payload string) (readings.Measures, error) {
-	root, err := readObject(payload)
-	if err != nil {
-		return readings.Measures{}, err
+	if strings.TrimSpace(payload) == "" || len(payload) > maxPayload {
+		return readings.Measures{}, errors.New("mensaje vacío o demasiado grande")
 	}
+
+	root := mapPool.Get().(map[string]any)
+	clear(root)
+	defer mapPool.Put(root)
+
+	if err := json.Unmarshal([]byte(payload), &root); err != nil {
+		return readings.Measures{}, errors.New("el mensaje no es un objeto JSON válido")
+	}
+
 	m := readings.Measures{}
 	for field, target := range map[string]**float64{
 		"temperature":  &m.Temperature,
@@ -44,26 +60,23 @@ func ParseTelemetry(payload string) (readings.Measures, error) {
 
 // ParseAck lee la confirmación del dispositivo. status: EXECUTED o FAILED.
 func ParseAck(payload string) (commands.AckMessage, error) {
-	root, err := readObject(payload)
-	if err != nil {
-		return commands.AckMessage{}, err
+	if strings.TrimSpace(payload) == "" || len(payload) > maxPayload {
+		return commands.AckMessage{}, errors.New("mensaje vacío o demasiado grande")
 	}
+
+	root := mapPool.Get().(map[string]any)
+	clear(root)
+	defer mapPool.Put(root)
+
+	if err := json.Unmarshal([]byte(payload), &root); err != nil {
+		return commands.AckMessage{}, errors.New("el mensaje no es un objeto JSON válido")
+	}
+
 	status := strings.ToUpper(stringField(root, "status"))
 	if status != "EXECUTED" && status != "FAILED" {
 		return commands.AckMessage{}, fmt.Errorf("estado de ACK desconocido: %s", status)
 	}
 	return commands.AckMessage{ID: stringField(root, "id"), Status: status, Message: stringField(root, "message")}, nil
-}
-
-func readObject(payload string) (map[string]any, error) {
-	if strings.TrimSpace(payload) == "" || len(payload) > maxPayload {
-		return nil, errors.New("mensaje vacío o demasiado grande")
-	}
-	var root map[string]any
-	if err := json.Unmarshal([]byte(payload), &root); err != nil {
-		return nil, errors.New("el mensaje no es un objeto JSON válido")
-	}
-	return root, nil
 }
 
 func number(root map[string]any, field string) (*float64, error) {
