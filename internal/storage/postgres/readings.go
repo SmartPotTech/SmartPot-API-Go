@@ -90,18 +90,32 @@ func (r *ReadingRepository) Insert(ctx context.Context, reading *readings.Readin
 	return err
 }
 
-// InsertBatch guarda un conjunto de lecturas de telemetría en un único round-trip atómico con pgx.Batch.
+// InsertBatch guarda un conjunto de lecturas de telemetría usando pgx.CopyFrom (streaming binario) con fallback a pgx.Batch.
 func (r *ReadingRepository) InsertBatch(ctx context.Context, batchReadings []readings.Reading) error {
 	if len(batchReadings) == 0 {
 		return nil
 	}
-	batch := &pgx.Batch{}
-	sql := "INSERT INTO readings (" + readingColumns + ") VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11)"
+	rows := make([][]any, len(batchReadings))
 	for i := range batchReadings {
 		rd := &batchReadings[i]
 		if rd.ID.IsZero() {
 			rd.ID = primitive.NewObjectID()
 		}
+		m := rd.Measures
+		rows[i] = []any{
+			hexOf(rd.ID), hexOf(rd.CropID), rd.MeasuredAt, nullEnum(string(rd.Source)),
+			m.Temperature, m.Humidity, m.Brightness, m.Ph, m.Tds, m.Atmosphere, m.SoilMoisture,
+		}
+	}
+	cols := []string{"id", "crop_id", "measured_at", "source", "temperature", "humidity", "brightness", "ph", "tds", "atmosphere", "soil_moisture"}
+	if _, err := r.pool.CopyFrom(ctx, pgx.Identifier{"readings"}, cols, pgx.CopyFromRows(rows)); err == nil {
+		return nil
+	}
+
+	batch := &pgx.Batch{}
+	sql := "INSERT INTO readings (" + readingColumns + ") VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11)"
+	for i := range batchReadings {
+		rd := &batchReadings[i]
 		m := rd.Measures
 		batch.Queue(sql,
 			hexOf(rd.ID), hexOf(rd.CropID), rd.MeasuredAt, nullEnum(string(rd.Source)),
@@ -183,7 +197,7 @@ func (r *ReadingRepository) Summary(ctx context.Context, cropID primitive.Object
 	return count, metrics, nil
 }
 
-// SeriesAverages calcula promedios por cultivo e intervalo con time_bucket (equivalente de $dateTrunc).
+// SeriesAverages calcula promedios por cultivo e intervalo enrutando inteligentemente hacia las vistas continuas.
 func (r *ReadingRepository) SeriesAverages(ctx context.Context, cropIDs []primitive.ObjectID, metric string, from time.Time, bucketMinutes int) ([]readings.Bucket, error) {
 	col, ok := metricColumn[metric]
 	if !ok || len(cropIDs) == 0 {
@@ -193,6 +207,39 @@ func (r *ReadingRepository) SeriesAverages(ctx context.Context, cropIDs []primit
 	for i, id := range cropIDs {
 		hexes[i] = id.Hex()
 	}
+
+	// Enrutamiento inteligente a vistas continuas materializadas
+	var caggTable string
+	if bucketMinutes >= 60 {
+		caggTable = "readings_hourly"
+	} else if bucketMinutes >= 15 {
+		caggTable = "readings_15m"
+	} else if bucketMinutes >= 1 {
+		caggTable = "readings_1m"
+	}
+
+	if caggTable != "" {
+		caggCol := "avg_" + col
+		sqlCagg := "SELECT crop_id, time_bucket(make_interval(mins => $2), bucket) AS b, avg(" + caggCol + ") " +
+			"FROM " + caggTable + " WHERE crop_id = ANY($1) AND bucket >= $3 AND " + caggCol + " IS NOT NULL " +
+			"GROUP BY crop_id, b ORDER BY b ASC"
+		rows, err := r.pool.Query(ctx, sqlCagg, hexes, bucketMinutes, from)
+		if err == nil {
+			defer rows.Close()
+			out := make([]readings.Bucket, 0)
+			for rows.Next() {
+				var b readings.Bucket
+				if err := rows.Scan(&b.CropID, &b.Time, &b.Value); err == nil {
+					out = append(out, b)
+				}
+			}
+			if rows.Err() == nil && len(out) > 0 {
+				return out, nil
+			}
+		}
+	}
+
+	// Fallback a la hipertabla readings
 	sql := "SELECT crop_id, time_bucket(make_interval(mins => $2), measured_at) AS bucket, avg(" + col + ") " +
 		"FROM readings WHERE crop_id = ANY($1) AND measured_at >= $3 AND " + col + " IS NOT NULL " +
 		"GROUP BY crop_id, bucket ORDER BY bucket ASC"
