@@ -36,7 +36,10 @@ type Adapter struct {
 func New(addr, username, password string, db int, timeout time.Duration) *Adapter {
 	network := "tcp"
 	targetAddr := addr
-	if strings.HasPrefix(addr, "unix://") {
+	if valkeySock := os.Getenv("VALKEY_SOCKET"); valkeySock != "" {
+		network = "unix"
+		targetAddr = valkeySock
+	} else if strings.HasPrefix(addr, "unix://") {
 		network = "unix"
 		targetAddr = strings.TrimPrefix(addr, "unix://")
 	} else if _, err := os.Stat("/var/run/smartpot/valkey.sock"); err == nil {

@@ -64,7 +64,9 @@ func NewClient(cfg config.AI, store cache.Cache, clock func() time.Time) *Client
 
 	if cfg.Enabled {
 		target := ""
-		if _, err := os.Stat("/var/run/smartpot/ai.sock"); err == nil {
+		if sock := os.Getenv("AI_GRPC_SOCKET"); sock != "" {
+			target = "unix://" + sock
+		} else if _, err := os.Stat("/var/run/smartpot/ai.sock"); err == nil {
 			target = "unix:///var/run/smartpot/ai.sock"
 		} else if strings.Contains(cfg.BaseURL, ":8000") {
 			host := strings.TrimPrefix(cfg.BaseURL, "http://")
