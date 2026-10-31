@@ -49,13 +49,24 @@ type Service struct {
 	batchStop   chan struct{}
 
 	latestCache sync.Map // Caché de última lectura por cultivo para latencia instantánea <0.1ms
+
+	streamMu sync.RWMutex
+	streams  map[string]map[chan *Reading]struct{}
 }
 
 // NewService crea el servicio de lecturas.
 func NewService(repo Repository, crops Crops, store cache.Cache, bus *events.Bus, clock func() time.Time,
 	minInterval time.Duration, maxPageSize int) *Service {
-	return &Service{repo: repo, crops: crops, cache: store, bus: bus, clock: clock,
-		minInterval: minInterval, maxPageSize: maxPageSize}
+	return &Service{
+		repo:        repo,
+		crops:       crops,
+		cache:       store,
+		bus:         bus,
+		clock:       clock,
+		minInterval: minInterval,
+		maxPageSize: maxPageSize,
+		streams:     make(map[string]map[chan *Reading]struct{}),
+	}
 }
 
 // StartBatchWorker arranca el worker de micro-batching con ventana ultracorta (10ms) o umbral de 100 lecturas y reciclaje de memoria via sync.Pool.
@@ -276,6 +287,44 @@ func (s *Service) SeriesAverages(ctx context.Context, cropIDs []string, metric s
 	return s.repo.SeriesAverages(ctx, oids, metric, from, bucketMinutes)
 }
 
+// SubscribeStream se suscribe a las lecturas en tiempo real de un cultivo mediante un canal.
+// Devuelve el canal de recepción y una función para desuscribirse limpiamente.
+func (s *Service) SubscribeStream(cropID string) (<-chan *Reading, func()) {
+	s.streamMu.Lock()
+	defer s.streamMu.Unlock()
+	ch := make(chan *Reading, 16)
+	if s.streams[cropID] == nil {
+		s.streams[cropID] = make(map[chan *Reading]struct{})
+	}
+	s.streams[cropID][ch] = struct{}{}
+
+	unsubscribe := func() {
+		s.streamMu.Lock()
+		defer s.streamMu.Unlock()
+		if subs, ok := s.streams[cropID]; ok {
+			delete(subs, ch)
+			if len(subs) == 0 {
+				delete(s.streams, cropID)
+			}
+		}
+		close(ch)
+	}
+	return ch, unsubscribe
+}
+
+func (s *Service) broadcastStream(cropID string, r *Reading) {
+	s.streamMu.RLock()
+	defer s.streamMu.RUnlock()
+	subs := s.streams[cropID]
+	for ch := range subs {
+		select {
+		case ch <- r:
+		default:
+			// descarta sin bloquear si el consumidor no procesa a tiempo
+		}
+	}
+}
+
 // DeleteByCrop borra las lecturas de un cultivo (borrado en cascada por evento).
 func (s *Service) DeleteByCrop(ctx context.Context, cropID string) error {
 	s.latestCache.Delete(cropID)
@@ -297,6 +346,7 @@ func (s *Service) store(ctx context.Context, cropID string, measures Measures, s
 	reading := &Reading{ID: primitive.NewObjectID(), CropID: oid, MeasuredAt: s.clock(), Measures: measures, Source: source}
 	// Guarda de inmediato en caché en memoria para que Latest devuelva la última lectura sin esperar al flush del batch
 	s.latestCache.Store(cropID, reading)
+	s.broadcastStream(cropID, reading)
 
 	if source == SourceMQTT && s.batchActive.Load() {
 		select {

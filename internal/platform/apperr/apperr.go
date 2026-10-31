@@ -27,6 +27,7 @@ func Conflict(message string) *Error     { return New(http.StatusConflict, messa
 func Unauthorized(message string) *Error { return New(http.StatusUnauthorized, message) }
 func Forbidden(message string) *Error    { return New(http.StatusForbidden, message) }
 func Unavailable(message string) *Error  { return New(http.StatusServiceUnavailable, message) }
+func Internal(message string) *Error     { return New(http.StatusInternalServerError, message) }
 
 // ValidationError representa un fallo de validación de campos de entrada (400)
 // que viaja como error tipado hasta el HTTPErrorHandler centralizado.

@@ -1,6 +1,7 @@
 package readings
 
 import (
+	"encoding/json"
 	"fmt"
 	"net/http"
 	"strconv"
@@ -28,6 +29,8 @@ func (h *Handler) Register(g *echo.Group) {
 	g.GET("/crops/:cropId/readings/latest", h.latest)
 	g.GET("/crops/:cropId/readings/summary", h.summary)
 	g.GET("/crops/:cropId/readings/export", h.export)
+	g.GET("/crops/:cropId/readings/stream", h.streamSSE)
+	g.GET("/crops/:cropId/stream", h.streamSSE)
 	g.POST("/crops/:cropId/readings", h.create)
 }
 
@@ -110,6 +113,59 @@ func (h *Handler) create(c echo.Context) error {
 		return err
 	}
 	return c.JSON(http.StatusCreated, ToResponse(reading))
+}
+
+func (h *Handler) streamSSE(c echo.Context) error {
+	cropID := c.Param("cropId")
+	userID := security.CurrentUserID(c)
+	if err := h.svc.crops.RequireOwned(c.Request().Context(), userID, cropID); err != nil {
+		return err
+	}
+
+	w := c.Response()
+	w.Header().Set("Content-Type", "text/event-stream")
+	w.Header().Set("Cache-Control", "no-cache")
+	w.Header().Set("Connection", "keep-alive")
+	w.Header().Set("X-Accel-Buffering", "no")
+	w.WriteHeader(http.StatusOK)
+
+	ch, unsubscribe := h.svc.SubscribeStream(cropID)
+	defer unsubscribe()
+
+	flusher, ok := w.Writer.(http.Flusher)
+	if !ok {
+		return apperr.Internal("Streaming no soportado")
+	}
+	flusher.Flush()
+
+	ticker := time.NewTicker(15 * time.Second)
+	defer ticker.Stop()
+
+	ctx := c.Request().Context()
+	for {
+		select {
+		case <-ctx.Done():
+			return nil
+		case r, ok := <-ch:
+			if !ok {
+				return nil
+			}
+			resp := ToResponse(r)
+			data, err := json.Marshal(resp)
+			if err != nil {
+				continue
+			}
+			if _, err := fmt.Fprintf(w, "event: reading\ndata: %s\n\n", data); err != nil {
+				return nil
+			}
+			flusher.Flush()
+		case <-ticker.C:
+			if _, err := fmt.Fprintf(w, ": keepalive\n\n"); err != nil {
+				return nil
+			}
+			flusher.Flush()
+		}
+	}
 }
 
 func queryTime(c echo.Context, key string) (*time.Time, bool) {
